@@ -4,24 +4,50 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from data import DataFetcher
-from strategy import BreakoutRetestStrategy
 from trader import Trader
 from logger import Logger
 
 def format_startup_message(config):
     symbols = ', '.join(config['trading']['symbols'])
     init_symbol = config['trading']['symbol'] if 'symbol' in config['trading'] else config['trading']['symbols'][0]
+    # Hole Strategie-Parameter, falls sie nicht im Trading-Config stehen
+    strategy_cfg = {}
+    try:
+        with open('strategy_high_volatility_breakout_momentum.yaml', encoding="utf-8") as f:
+            strategy_cfg = yaml.safe_load(f)
+    except Exception:
+        strategy_cfg = {}
+    risk_percent = config['trading'].get('risk_percent', strategy_cfg.get('risk_percent', ''))
+    reward_ratio = config['trading'].get('reward_ratio', strategy_cfg.get('reward_ratio', ''))
+    stop_loss_buffer = config['trading'].get('stop_loss_buffer', strategy_cfg.get('stop_loss_buffer', ''))
+    stake_percent = config['trading'].get('stake_percent', '')
+    futures = config['trading'].get('futures', '')
+    params = strategy_cfg.get('params', {})
     msg = (
         f"TradingBot gestartet!\n"
         f"Modus: {config['execution']['mode']}\n"
         f"Symbole: {symbols}\n"
         f"Initialisiertes Symbol: {init_symbol}\n"
         f"Timeframe: {config['trading']['timeframe']}\n"
-        f"Strategie: Breakout + Retest\n"
-        f"Risk/Trade: {config['trading']['risk_percent']}%\n"
-        f"Reward Ratio: {config['trading']['reward_ratio']}\n"
-        f"Stop-Loss Buffer: {config['trading']['stop_loss_buffer']}\n"
+        f"Strategie: {strategy_cfg.get('name', 'Unbekannt')}\n"
+        f"Risk/Trade: {risk_percent}%\n"
+        f"Stake/Trade: {stake_percent}\n"
+        f"Futures: {futures}\n"
+        f"Reward Ratio: {reward_ratio}\n"
+        f"Stop-Loss Buffer: {stop_loss_buffer}\n"
         f"Max Trades/Tag: {config['execution']['max_trades_per_day']}\n"
+        f"--- Strategie-Parameter ---\n"
+        f"Stop-Loss %: {params.get('stop_loss_pct', '')}\n"
+        f"Take-Profit %: {params.get('take_profit_pct', '')}\n"
+        f"Trailing-Trigger %: {params.get('trailing_trigger_pct', params.get('trailing_stop_trigger_pct', ''))}\n"
+        f"Price Change %: {params.get('price_change_pct', '')}\n"
+        f"Volume Multiplier: {params.get('volume_mult', '')}\n"
+        f"RSI Long: {params.get('rsi_long', '')}\n"
+        f"RSI Short: {params.get('rsi_short', '')}\n"
+        f"RSI TP Exit: {params.get('rsi_tp_exit', '')}\n"
+        f"Momentum Exit RSI: {params.get('momentum_exit_rsi', '')}\n"
+        f"Trailing Stop Trigger %: {params.get('trailing_stop_trigger_pct', '')}\n"
+        f"Window: {params.get('window', '')}\n"
     )
     return msg
 

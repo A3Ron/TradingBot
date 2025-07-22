@@ -5,14 +5,20 @@ import os
 import yaml
 import subprocess
 import signal
-import time
-import copy
 
 # --- Function Definitions ---
 def load_trades(log_path):
     if os.path.exists(log_path):
-        return pd.read_csv(log_path)
-    return pd.DataFrame()
+        if os.path.getsize(log_path) > 0:
+            return pd.read_csv(log_path)
+        else:
+            # Leere Datei, gebe leeres DataFrame mit Spaltennamen zurück
+            return pd.DataFrame(columns=[
+                "timestamp","symbol","entry_price","exit_price","stop_loss","take_profit","volume","outcome","exit_type","signal_reason"
+            ])
+    return pd.DataFrame(columns=[
+        "timestamp","symbol","entry_price","exit_price","stop_loss","take_profit","volume","outcome","exit_type","signal_reason"
+    ])
 
 def load_config(config_path):
     if os.path.exists(config_path):
@@ -194,7 +200,7 @@ if not df.empty:
 with st.expander("Binance OHLCV Daten", expanded=False):
     st.subheader("Letzte OHLCV-Daten aller Symbole")
     ohlcv_latest_path = "logs/ohlcv_latest.csv"
-    if os.path.exists(ohlcv_latest_path):
+    if os.path.exists(ohlcv_latest_path) and os.path.getsize(ohlcv_latest_path) > 0:
         import pandas as pd
         from datetime import datetime, timedelta
         ohlcv_df = pd.read_csv(ohlcv_latest_path)
@@ -261,17 +267,17 @@ with st.expander("Binance OHLCV Daten", expanded=False):
             # Tabelle mit allen Werten im gewählten Zeitraum (alle Symbole)
             st.dataframe(df_filtered)
     else:
-        st.write("Keine Daten geladen.")
+        st.write("Keine OHLCV-Daten geladen oder Datei ist leer.")
 
 # Trade Log Panel direkt vor Bot Log
 with st.expander("Trade Log", expanded=False):
     st.subheader("Letzte Trade-Log-Zeilen")
     trade_log_path = "logs/trades.csv"
-    if os.path.exists(trade_log_path):
+    if os.path.exists(trade_log_path) and os.path.getsize(trade_log_path) > 0:
         trade_df = pd.read_csv(trade_log_path)
         st.dataframe(trade_df.tail(30))
     else:
-        st.write("Keine Trade-Logdaten gefunden.")
+        st.write("Keine Trade-Logdaten gefunden oder Datei ist leer.")
 
 # Bot Log ganz unten
 with st.expander("Bot Log", expanded=False):

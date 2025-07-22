@@ -1,5 +1,5 @@
 name: high_volatility_breakout_momentum
-risk_percent: 1.0
+risk_percent: 20.0 # Prozent des Kapitals, das pro Trade riskiert wird
 reward_ratio: 2.0
 stop_loss_buffer: 0.0
 params:

@@ -11,7 +11,7 @@ trading:
   futures: false
 execution:
   mode: live
-  max_trades_per_day: 3
+  max_trades_per_day: 5
 logging:
   enabled: true
   path: logs/trades.csv
