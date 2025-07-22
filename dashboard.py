@@ -6,6 +6,7 @@ import yaml
 import subprocess
 import signal
 import time
+import copy
 
 # --- Function Definitions ---
 def load_trades(log_path):
@@ -108,15 +109,47 @@ except Exception as e:
 
 # Strategie
 with st.expander("Strategie", expanded=True):
-    st.subheader("Breakout + Retest")
-    st.markdown("""
-    **Strategie-Logik:**
-    - Ein Trade wird ausgelöst, wenn:
-        - Der Schlusskurs höher als das Widerstandsniveau ist **und** das Volumen über dem Durchschnitt liegt (Breakout).
-        - Der Tiefstkurs ist kleiner/gleich Widerstand **und** der Schlusskurs ist über Widerstand (Retest).
-    - Nur wenn beide Bedingungen gleichzeitig erfüllt sind, wird ein Trade-Signal erzeugt.
-    - Stop-Loss und Take-Profit werden automatisch nach den Einstellungen berechnet.
+    st.subheader("High-Volatility Breakout + Momentum-Rider")
+    strategy_file = "strategy_high_volatility_breakout_momentum.yaml"
+    strategy_cfg = {}
+    try:
+        with open(strategy_file, encoding="utf-8") as f:
+            strategy_cfg = yaml.safe_load(f)
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Strategie-Konfiguration: {e}")
+
+    st.markdown("---")
+    st.subheader("Was macht diese Strategie?")
+    params = strategy_cfg.get('params', {})
+    st.markdown(f"""
+    **High-Volatility Breakout + Momentum-Rider:**
+    - Long-Signal:
+        - Preis steigt > {params.get('price_change_pct', 0.03)*100:.1f}% in 1h
+        - Volumen > {params.get('volume_mult', 2.0)}x Durchschnitt ({params.get('window', 5)}h)
+        - RSI > {params.get('rsi_long', 60)}
+    - Short-Signal:
+        - Preis fällt < -{params.get('price_change_pct', 0.03)*100:.1f}% in 1h
+        - Volumen > {params.get('volume_mult', 2.0)}x Durchschnitt
+        - RSI < {params.get('rsi_short', 40)}
+    - Stop-Loss: {params.get('stop_loss_pct', 0.03)*100:.1f}%
+    - Take-Profit: {params.get('take_profit_pct', 0.08)*100:.1f}%
+    - Trailing-Stop ab: {params.get('trailing_stop_trigger_pct', 0.05)*100:.1f}%
+    - Momentum-Exit: RSI < {params.get('momentum_exit_rsi', 50)}
+    
+    **Beispiel:**
+    - Preisänderung: +3.2%
+    - Volumen: 2200 (Durchschnitt: 1000)
+    - RSI: 65
+    - Signal: Long, Trade wird ausgelöst.
     """)
+
+    st.markdown("**Parameter aus YAML:**")
+    st.write({
+        "risk_percent": strategy_cfg.get("risk_percent"),
+        "reward_ratio": strategy_cfg.get("reward_ratio"),
+        "stop_loss_buffer": strategy_cfg.get("stop_loss_buffer"),
+        **{k: v for k, v in params.items()}
+    })
 
 # Start/Stop Buttons ganz oben
 col1, col2 = st.columns(2)

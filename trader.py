@@ -2,6 +2,40 @@ import ccxt
 import yaml
 
 class Trader:
+    def monitor_trade(self, trade, df, strategy):
+        """
+        Überwacht einen offenen Trade und prüft alle Exit-Bedingungen:
+        - Take-Profit
+        - Stop-Loss
+        - Momentum-Exit (RSI < momentum_exit_rsi)
+        - Trailing-Stop (SL auf Entry nachziehen)
+        Gibt den Exit-Typ zurück oder None, wenn Trade offen bleibt.
+        """
+        current_price = df['close'].iloc[-1]
+        # 1. Take-Profit
+        if current_price >= trade.take_profit:
+            self.logger.info(f"Take-Profit erreicht: {current_price} >= {trade.take_profit}")
+            self.send_telegram(f"Take-Profit erreicht: {current_price} >= {trade.take_profit}")
+            return "take_profit"
+        # 2. Stop-Loss
+        if current_price <= trade.stop_loss:
+            self.logger.info(f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}")
+            self.send_telegram(f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}")
+            return "stop_loss"
+        # 3. Momentum-Exit
+        if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
+            self.logger.info(f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            self.send_telegram(f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            return "momentum_exit"
+        # 4. Trailing-Stop
+        if hasattr(strategy, 'get_trailing_stop'):
+            trailing_stop = strategy.get_trailing_stop(trade.entry, current_price)
+            if trailing_stop is not None and current_price > trade.entry:
+                old_sl = trade.stop_loss
+                trade.stop_loss = trailing_stop
+                self.logger.info(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+                self.send_telegram(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+        return None  # Trade bleibt offen
     def __init__(self, config):
         import logging
         self.config = config

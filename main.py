@@ -25,8 +25,6 @@ def format_startup_message(config):
     )
     return msg
 
-
-
 import logging
 import os
 with open('config.yaml') as f:
@@ -66,19 +64,22 @@ except Exception as e:
     logger.warning(f"[WARN] Konnte OHLCV-Datei nicht bereinigen: {e}")
 
 while True:
+
     try:
+        from strategy import get_strategy
+        open_trades = {}  # symbol -> TradeSignal
         for symbol in config['trading']['symbols']:
             # Symbol-spezifische Konfiguration
             config_symbol = config.copy()
             config_symbol['trading'] = config['trading'].copy()
             config_symbol['trading']['symbol'] = symbol
             data_fetcher = DataFetcher(config_symbol)
-            strategy = BreakoutRetestStrategy(config_symbol)
+            strategy = get_strategy(config_symbol)
             trader = Trader(config_symbol)
             logger.info(f"[MAIN] Lade Daten für {symbol} {config_symbol['trading']['timeframe']}")
-            df = data_fetcher.fetch_ohlcv(limit=2)
+            df = data_fetcher.fetch_ohlcv(limit=50)
             # --- Zentrale Signal- und Grundberechnung ---
-            df = strategy.get_signals_and_reasons(df, window=20)
+            df = strategy.get_signals_and_reasons(df)
             # --- Schreibe die zuletzt gefetchten OHLCV-Daten aller Symbole in ein gemeinsames File ---
             try:
                 df_latest = df.copy()
@@ -112,15 +113,30 @@ while True:
                     df_to_write.to_csv(file_path, mode='a', header=write_header, index=False)
             except Exception as e:
                 logger.error(f"Fehler beim Schreiben der OHLCV-Daten für {symbol}: {e}")
-            # --- Trade-Logik bleibt wie gehabt ---
-            support, resistance = data_fetcher.get_support_resistance(df)
-            volume_avg = data_fetcher.get_volume_average(df)
-            last_signal = strategy.check_signal(df, support, resistance, volume_avg)
-            if last_signal:
-                logger.info(f"[MAIN] Trade-Signal erkannt für {symbol}: {last_signal}")
-                result = trader.execute_trade(last_signal)
-                trader.set_stop_loss_take_profit(last_signal.entry, last_signal.stop_loss, last_signal.take_profit)
-                logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
+
+            # --- Trade-Überwachung & Ausführung ---
+            # 1. Prüfe, ob ein Trade offen ist
+            trade = open_trades.get(symbol)
+            # 2. Wenn kein Trade offen, prüfe auf neues Signal
+            if trade is None:
+                last_signal = None
+                if hasattr(strategy, 'check_signal'):
+                    last_signal = strategy.check_signal(df)
+                if last_signal:
+                    logger.info(f"[MAIN] Trade-Signal erkannt für {symbol}: {last_signal}")
+                    result = trader.execute_trade(last_signal)
+                    trader.set_stop_loss_take_profit(last_signal.entry, last_signal.stop_loss, last_signal.take_profit)
+                    logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
+                    open_trades[symbol] = last_signal
+            else:
+                # 3. Überwache offenen Trade
+                exit_type = trader.monitor_trade(trade, df, strategy)
+                if exit_type:
+                    logger.info(f"[MAIN] Trade für {symbol} geschlossen: {exit_type}")
+                    trader.send_telegram(f"Trade für {symbol} geschlossen: {exit_type}")
+                    # Hier könntest du die Position glattstellen (z.B. Market Sell)
+                    # trader.execute_short_trade(trade)  # Für Spot: Verkauf
+                    open_trades[symbol] = None
         time.sleep(30)
     except Exception as e:
         logger.error(f"Error: {e}")

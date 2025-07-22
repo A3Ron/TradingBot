@@ -1,0 +1,16 @@
+name: high_volatility_breakout_momentum
+risk_percent: 1.0
+reward_ratio: 2.0
+stop_loss_buffer: 0.0
+params:
+  stop_loss_pct: 0.03
+  take_profit_pct: 0.08
+  trailing_trigger_pct: 0.05
+  price_change_pct: 0.03
+  volume_mult: 2.0
+  rsi_long: 60
+  rsi_short: 40
+  rsi_tp_exit: 50
+  momentum_exit_rsi: 50
+  trailing_stop_trigger_pct: 0.05  # Bei +5% Gewinn wird Trailing Stop aktiviert
+  window: 5

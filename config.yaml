@@ -1,24 +1,20 @@
 binance:
-  api_key: "${BINANCE_API_KEY_TEST}"
-  api_secret: "${BINANCE_API_SECRET_TEST}"
+  api_key: ${BINANCE_API_KEY_TEST}
+  api_secret: ${BINANCE_API_SECRET_TEST}
 trading:
   symbols:
-    - "BTC/USDT"
-    - "ETH/USDT"
-    - "BNB/USDT"
-  timeframe: "1m"
+  - BTC/USDT
+  - ETH/USDT
+  - BNB/USDT
+  timeframe: 1m
   stake_percent: 0.02
-  risk_percent: 1
-  reward_ratio: 2
-  stop_loss_buffer: 0.005
-  futures: false  # true für Futures, false für Spot
+  futures: false
 execution:
-  mode: "live" # live oder testnet
+  mode: live
   max_trades_per_day: 3
 logging:
   enabled: true
-  path: "logs/trades.csv"
-
+  path: logs/trades.csv
 telegram:
-  token: "${TELEGRAM_TOKEN}"
-  chat_id: "${TELEGRAM_CHAT_ID}"
+  token: ${TELEGRAM_TOKEN}
+  chat_id: ${TELEGRAM_CHAT_ID}
