@@ -12,25 +12,17 @@ class TradeSignal:
 
 # Strategie-Factory
 def get_strategy(config):
-    name = config.get('strategy', {}).get('name', 'breakout_retest')
-    strategy_file_map = {
-        'breakout_retest': 'strategy_breakout_retest.yaml',
-        'moving_average': 'strategy_moving_average.yaml',
-        'rsi': 'strategy_rsi.yaml',
-        'high_volatility_breakout_momentum': 'strategy_high_volatility_breakout_momentum.yaml'
-    }
-    if name not in strategy_file_map:
-        raise ValueError(f"Unbekannte Strategie: {name}")
-    # Lade YAML-Konfiguration
+    # Nur noch high_volatility_breakout_momentum unterstützen
+    name = config.get('strategy', {}).get('name', 'high_volatility_breakout_momentum')
+    if name != 'high_volatility_breakout_momentum':
+        raise ValueError(f"Nur 'high_volatility_breakout_momentum' wird unterstützt.")
     strategy_cfg = {}
     try:
-        with open(strategy_file_map[name], encoding="utf-8") as f:
+        with open('strategy_high_volatility_breakout_momentum.yaml', encoding="utf-8") as f:
             strategy_cfg = yaml.safe_load(f)
     except Exception as e:
         raise RuntimeError(f"Fehler beim Laden der Strategie-Konfiguration: {e}")
-    # Erzeuge Strategie-Instanz mit YAML-Konfig
-    if name == 'high_volatility_breakout_momentum':
-        return HighVolatilityBreakoutMomentumStrategy(strategy_cfg)
+    return HighVolatilityBreakoutMomentumStrategy(strategy_cfg)
 
 
 class HighVolatilityBreakoutMomentumStrategy:
