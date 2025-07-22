@@ -81,12 +81,10 @@ class Trader:
         if not self.telegram_token or not self.telegram_chat_id:
             return
         import requests
-        from requests.packages.urllib3.exceptions import InsecureRequestWarning
-        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
         url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
         data = {"chat_id": self.telegram_chat_id, "text": message}
         try:
-            requests.post(url, data=data, verify=False)
+            requests.post(url, data=data)
         except Exception as e:
             self.logger.warning(f"Telegram error: {e}")
     def get_trade_volume(self, signal):

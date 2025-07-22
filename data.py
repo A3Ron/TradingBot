@@ -13,6 +13,41 @@ if not logger.hasHandlers():
     logger.addHandler(logfile_handler)
 
 class DataFetcher:
+    def fetch_portfolio(self):
+        """Fetches current portfolio balances and asset values from Binance."""
+        try:
+            # Get balances
+            balances = self.exchange.fetch_balance()
+            assets = []
+            total_value = 0.0
+            prices = {}
+            # Get tickers for all assets with nonzero balance
+            for asset, info in balances['total'].items():
+                if info > 0:
+                    symbol = asset + '/USDT'
+                    try:
+                        ticker = self.exchange.fetch_ticker(symbol)
+                        price = ticker['last'] if 'last' in ticker else ticker['close']
+                        value = info * price
+                        prices[asset] = price
+                        total_value += value
+                        assets.append({
+                            'asset': asset,
+                            'amount': info,
+                            'price': price,
+                            'value': value
+                        })
+                    except Exception:
+                        assets.append({
+                            'asset': asset,
+                            'amount': info,
+                            'price': None,
+                            'value': None
+                        })
+            return {'assets': assets, 'total_value': total_value, 'prices': prices}
+        except Exception as e:
+            logger.error(f"[ERROR] Portfolio fetch failed: {e}")
+            return {'assets': [], 'total_value': 0.0, 'prices': {}}
     def __init__(self, config):
         import os
         mode = config['execution']['mode']
@@ -60,7 +95,7 @@ class DataFetcher:
                 'limit': limit
             }
             try:
-                response = requests.get(base_url, params=params, verify=False, timeout=10)
+                response = requests.get(base_url, params=params, timeout=10)
                 if response.status_code != 200:
                     logger.error(f'[ERROR] HTTP Request failed: {response.text}')
                     response.raise_for_status()

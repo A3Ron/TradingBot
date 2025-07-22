@@ -1,3 +1,4 @@
+# --- Imports ---
 import streamlit as st
 import pandas as pd
 import os
@@ -6,8 +7,24 @@ import subprocess
 import signal
 import time
 
-PID_FILE = "bot.pid"
-MAIN_SCRIPT = "main.py"
+# --- Function Definitions ---
+def load_trades(log_path):
+    if os.path.exists(log_path):
+        return pd.read_csv(log_path)
+    return pd.DataFrame()
+
+def load_config(config_path):
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            return yaml.safe_load(f)
+    return {}
+
+def load_botlog(log_path, lines=30):
+    if os.path.exists(log_path):
+        with open(log_path, encoding="utf-8") as f:
+            loglines = f.readlines()
+        return loglines[-lines:]
+    return ["Keine Logdaten gefunden."]
 
 def get_pid():
     if os.path.exists(PID_FILE):
@@ -31,8 +48,6 @@ def start_bot():
     pid = get_pid()
     if pid and is_process_running(pid):
         return False, f"Bot läuft bereits (PID: {pid})"
-    # Starte main.py als neuen Prozess
-    # Starte den Bot als unabhängigen Prozess (Windows: CREATE_NEW_PROCESS_GROUP)
     creationflags = 0
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -54,32 +69,42 @@ def stop_bot():
     except Exception as e:
         return False, f"Fehler beim Stoppen: {e}"
 
-def load_trades(log_path):
-    if os.path.exists(log_path):
-        return pd.read_csv(log_path)
-    return pd.DataFrame()
-
-def load_config(config_path):
-    if os.path.exists(config_path):
-        with open(config_path) as f:
-            return yaml.safe_load(f)
-    return {}
-
-
-st.title("Trading Bot Dashboard")
-
+# --- Constants and Initial Data ---
 log_path = "logs/trades.csv"
 config_path = "config.yaml"
 botlog_path = "logs/bot.log"
+PID_FILE = "bot.pid"
+MAIN_SCRIPT = "main.py"
 df = load_trades(log_path)
 config = load_config(config_path)
 
-def load_botlog(log_path, lines=30):
-    if os.path.exists(log_path):
-        with open(log_path, encoding="utf-8") as f:
-            loglines = f.readlines()
-        return loglines[-lines:]
-    return ["Keine Logdaten gefunden."]
+# --- UI Code ---
+st.title("Trading Bot Dashboard")
+
+# Portfolio Panel
+st.header("Portfolio Übersicht")
+try:
+    from data import DataFetcher
+    with open('config.yaml') as f:
+        config_portfolio = yaml.safe_load(f)
+    fetcher = DataFetcher(config_portfolio)
+    portfolio = fetcher.fetch_portfolio()
+    st.write("[DEBUG] Portfolio raw:", portfolio)
+    assets = portfolio.get('assets', [])
+    st.write("[DEBUG] Assets list:", assets)
+    total_value = portfolio.get('total_value', 0.0)
+    if isinstance(assets, list) and len(assets) > 0:
+        df_assets = pd.DataFrame(assets)
+        show_cols = [c for c in ['asset', 'amount', 'price', 'value'] if c in df_assets.columns]
+        if show_cols:
+            st.dataframe(df_assets[show_cols], use_container_width=True)
+        else:
+            st.dataframe(df_assets, use_container_width=True)
+        st.metric("Portfolio Gesamtwert (USD)", f"{total_value:,.2f}")
+    else:
+        st.info("Keine Assets im Portfolio oder API-Fehler.")
+except Exception as e:
+    st.error(f"Fehler beim Laden des Portfolios: {e}")
 
 # Strategie
 with st.expander("Strategie", expanded=True):
