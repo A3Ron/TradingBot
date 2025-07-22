@@ -27,12 +27,13 @@ def format_startup_message(config):
 
 
 
-import os
 import logging
+import os
 with open('config.yaml') as f:
     config = yaml.safe_load(f)
 
 # Logger für Bot-Logdatei einrichten
+open('logs/bot.log', 'w').close()  # Bot-Logdatei beim Start leeren
 logger = logging.getLogger("tradingbot")
 logger.setLevel(logging.INFO)
 logfile_handler = logging.FileHandler("logs/bot.log", encoding="utf-8")
@@ -75,13 +76,21 @@ while True:
             strategy = BreakoutRetestStrategy(config_symbol)
             trader = Trader(config_symbol)
             logger.info(f"[MAIN] Lade Daten für {symbol} {config_symbol['trading']['timeframe']}")
-            df = data_fetcher.fetch_ohlcv()
-            # Schreibe die zuletzt gefetchten OHLCV-Daten aller Symbole in ein gemeinsames File
+            df = data_fetcher.fetch_ohlcv(limit=2)
+            # --- Zentrale Signal- und Grundberechnung ---
+            df = strategy.get_signals_and_reasons(df, window=20)
+            # --- Schreibe die zuletzt gefetchten OHLCV-Daten aller Symbole in ein gemeinsames File ---
             try:
                 df_latest = df.copy()
                 df_latest.insert(1, 'symbol', symbol)
-                df_to_write = df_latest.tail(100).copy()
-                # Nur die letzten 100 Zeilen pro Symbol speichern
+                # Nur die letzten 2 Zeilen pro Symbol speichern
+                df_to_write = df_latest.tail(2).copy()
+                # Stelle sicher, dass alle neuen Spalten enthalten sind
+                cols = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'resistance', 'vol_mean', 'signal', 'signal_reason']
+                for col in cols:
+                    if col not in df_to_write.columns:
+                        df_to_write[col] = None
+                df_to_write = df_to_write[cols]
                 file_path = "logs/ohlcv_latest.csv"
                 write_header = True
                 if os.path.exists(file_path):
@@ -103,16 +112,16 @@ while True:
                     df_to_write.to_csv(file_path, mode='a', header=write_header, index=False)
             except Exception as e:
                 logger.error(f"Fehler beim Schreiben der OHLCV-Daten für {symbol}: {e}")
+            # --- Trade-Logik bleibt wie gehabt ---
             support, resistance = data_fetcher.get_support_resistance(df)
             volume_avg = data_fetcher.get_volume_average(df)
-            signal = strategy.check_signal(df, support, resistance, volume_avg)
-            if signal:
-                logger.info(f"[MAIN] Trade-Signal erkannt für {symbol}: {signal}")
-                result = trader.execute_trade(signal)
-                trader.set_stop_loss_take_profit(signal.entry, signal.stop_loss, signal.take_profit)
-                # Logger für Trades bleibt wie gehabt
-                logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
-        time.sleep(60)
+            last_signal = strategy.check_signal(df, support, resistance, volume_avg)
+            if last_signal:
+                logger.info(f"[MAIN] Trade-Signal erkannt für {symbol}: {last_signal}")
+                result = trader.execute_trade(last_signal)
+                trader.set_stop_loss_take_profit(last_signal.entry, last_signal.stop_loss, last_signal.take_profit)
+                logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
+        time.sleep(30)
     except Exception as e:
         logger.error(f"Error: {e}")
-        time.sleep(60)
+        time.sleep(30)

@@ -48,7 +48,7 @@ class DataFetcher:
         self.symbol = config['trading']['symbol']
         self.timeframe = config['trading']['timeframe']
 
-    def fetch_ohlcv(self, limit=100):
+    def fetch_ohlcv(self, limit=5):
         import requests
         if hasattr(self, 'exchange') and hasattr(self.exchange, 'urls') and self.exchange.urls['api']['public'].startswith('https://testnet.binance.vision'):
             # Hole Daten direkt vom Spot-Testnet
@@ -73,7 +73,7 @@ class DataFetcher:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
                 df = df.astype({'open': float, 'high': float, 'low': float, 'close': float, 'volume': float})
-                logger.info(f"[OHLCV] Fetched {len(df)} rows for {self.symbol} {self.timeframe}")
+                logger.info(f"[OHLCV] Fetched {len(df)} rows for {self.symbol} {self.timeframe} (limit={limit})")
                 return df
             except requests.exceptions.RequestException as e:
                 logger.error(f'[ERROR] HTTP Request failed: {e}')
@@ -83,7 +83,7 @@ class DataFetcher:
                 ohlcv = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=limit)
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                logger.info(f"[OHLCV] Fetched {len(df)} rows for {self.symbol} {self.timeframe}")
+                logger.info(f"[OHLCV] Fetched {len(df)} rows for {self.symbol} {self.timeframe} (limit={limit})")
                 return df
             except Exception as e:
                 import traceback

@@ -162,30 +162,41 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         }
         if selected_symbol:
             df_symbol = ohlcv_df[ohlcv_df['symbol'] == selected_symbol]
-            df_symbol = df_symbol[df_symbol['timestamp'] >= time_filter]
-            # Chart für Open, High, Low, Close
-            import altair as alt
-            chart_data = df_symbol.set_index('timestamp')[chart_cols].reset_index()
-            # Y-Achse automatisch auf Wertebereich setzen
-            price_min = chart_data[chart_cols].min().min()
-            price_max = chart_data[chart_cols].max().max()
-            chart = alt.Chart(chart_data.melt('timestamp', value_vars=chart_cols)).mark_line().encode(
-                x=alt.X('timestamp:T', title='Zeit'),
-                y=alt.Y('value:Q', title='Preis', scale=alt.Scale(domain=[price_min, price_max])),
-                color=alt.Color('variable:N', scale=alt.Scale(domain=chart_cols, range=[color_map[c] for c in chart_cols]), legend=alt.Legend(title="Preis-Typ"))
-            ).properties(title=f"{selected_symbol} Open/High/Low/Close")
-            chart = chart.interactive()
-            st.altair_chart(chart, use_container_width=True)
-            # Volumen als separater interaktiver Chart mit automatischer Skalierung
-            vol_min = df_symbol['volume'].min()
-            vol_max = df_symbol['volume'].max()
-            vol_chart = alt.Chart(df_symbol).mark_area(color="#888888", opacity=0.5).encode(
-                x=alt.X('timestamp:T', title='Zeit'),
-                y=alt.Y('volume:Q', title='Volumen', scale=alt.Scale(domain=[vol_min, vol_max]))
-            ).properties(title=f"{selected_symbol} Volumen")
-            vol_chart = vol_chart.interactive()
-            st.altair_chart(vol_chart, use_container_width=True)
-            # Tabelle mit allen Werten im gewählten Zeitraum und Symbol
+            df_symbol = df_symbol[df_symbol['timestamp'] >= time_filter].copy()
+            if df_symbol.empty:
+                st.info("Keine Daten für diesen Zeitraum/Symbol.")
+            else:
+                # Chart für Open, High, Low, Close
+                import altair as alt
+                chart_data = df_symbol.set_index('timestamp')[chart_cols].reset_index()
+                price_min = chart_data[chart_cols].min().min()
+                price_max = chart_data[chart_cols].max().max()
+                chart = alt.Chart(chart_data.melt('timestamp', value_vars=chart_cols)).mark_line().encode(
+                    x=alt.X('timestamp:T', title='Zeit'),
+                    y=alt.Y('value:Q', title='Preis', scale=alt.Scale(domain=[price_min, price_max])),
+                    color=alt.Color('variable:N', scale=alt.Scale(domain=chart_cols, range=[color_map[c] for c in chart_cols]), legend=alt.Legend(title="Preis-Typ"))
+                ).properties(title=f"{selected_symbol} Open/High/Low/Close")
+                chart = chart.interactive()
+                # Marker für Trade-Signale aus Spalte 'signal'
+                if 'signal' in df_symbol.columns:
+                    signal_points = alt.Chart(df_symbol[df_symbol['signal'] == True]).mark_point(color='red', size=80).encode(
+                        x=alt.X('timestamp:T'),
+                        y=alt.Y('close:Q'),
+                        tooltip=['timestamp', 'close', 'signal_reason']
+                    )
+                    st.altair_chart(chart + signal_points, use_container_width=True)
+                else:
+                    st.altair_chart(chart, use_container_width=True)
+                # Volumen als separater interaktiver Chart mit automatischer Skalierung
+                vol_min = df_symbol['volume'].min()
+                vol_max = df_symbol['volume'].max()
+                vol_chart = alt.Chart(df_symbol).mark_area(color="#888888", opacity=0.5).encode(
+                    x=alt.X('timestamp:T', title='Zeit'),
+                    y=alt.Y('volume:Q', title='Volumen', scale=alt.Scale(domain=[vol_min, vol_max]))
+                ).properties(title=f"{selected_symbol} Volumen")
+                vol_chart = vol_chart.interactive()
+                st.altair_chart(vol_chart, use_container_width=True)
+            # Tabelle mit allen Werten im gewählten Zeitraum und Symbol inkl. Signal-Grund
             st.dataframe(df_symbol)
         else:
             df_filtered = ohlcv_df[ohlcv_df['timestamp'] >= time_filter]
