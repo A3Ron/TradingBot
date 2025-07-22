@@ -1,19 +1,28 @@
+import os
 import yaml
 import time
+import logging
+import pandas as pd
 from dotenv import load_dotenv
-load_dotenv()
-
 from data import DataFetcher
 from trader import Trader
 from logger import Logger
 
+# --- Konstanten ---
+CONFIG_PATH = 'config.yaml'
+STRATEGY_PATH = 'strategy_high_volatility_breakout_momentum.yaml'
+BOTLOG_PATH = 'logs/bot.log'
+OHLCV_PATH = 'logs/ohlcv_latest.csv'
+TRADELOG_PATH = 'logs/trades.csv'
+
+# --- Funktionen ---
 def format_startup_message(config):
     symbols = ', '.join(config['trading']['symbols'])
     init_symbol = config['trading']['symbol'] if 'symbol' in config['trading'] else config['trading']['symbols'][0]
     # Hole Strategie-Parameter, falls sie nicht im Trading-Config stehen
     strategy_cfg = {}
     try:
-        with open('strategy_high_volatility_breakout_momentum.yaml', encoding="utf-8") as f:
+        with open(STRATEGY_PATH, encoding="utf-8") as f:
             strategy_cfg = yaml.safe_load(f)
     except Exception:
         strategy_cfg = {}
@@ -51,16 +60,16 @@ def format_startup_message(config):
     )
     return msg
 
-import logging
-import os
-with open('config.yaml') as f:
+# --- Initialisierung ---
+load_dotenv()
+with open(CONFIG_PATH) as f:
     config = yaml.safe_load(f)
 
 # Logger für Bot-Logdatei einrichten
-open('logs/bot.log', 'w').close()  # Bot-Logdatei beim Start leeren
+open(BOTLOG_PATH, 'w').close()  # Bot-Logdatei beim Start leeren
 logger = logging.getLogger("tradingbot")
 logger.setLevel(logging.INFO)
-logfile_handler = logging.FileHandler("logs/bot.log", encoding="utf-8")
+logfile_handler = logging.FileHandler(BOTLOG_PATH, encoding="utf-8")
 logfile_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
 if not logger.hasHandlers():
     logger.addHandler(logfile_handler)
@@ -79,22 +88,20 @@ trader.send_telegram(startup_msg)
 
 # OHLCV-Datei beim Start bereinigen (Duplikate entfernen)
 try:
-    import pandas as pd
-    ohlcv_path = "logs/ohlcv_latest.csv"
-    if os.path.exists(ohlcv_path):
-        df = pd.read_csv(ohlcv_path)
+    if os.path.exists(OHLCV_PATH):
+        df = pd.read_csv(OHLCV_PATH)
         if 'timestamp' in df.columns and 'symbol' in df.columns:
             df = df.drop_duplicates(subset=['timestamp', 'symbol'])
-            df.to_csv(ohlcv_path, index=False)
+            df.to_csv(OHLCV_PATH, index=False)
 except Exception as e:
     logger.warning(f"[WARN] Konnte OHLCV-Datei nicht bereinigen: {e}")
 
+# --- Hauptloop ---
 while True:
-
     try:
         from strategy import get_strategy
         open_trades = {}  # symbol -> TradeSignal
-        trade_logger = Logger("logs/trades.csv")
+        trade_logger = Logger(TRADELOG_PATH)
         for symbol in config['trading']['symbols']:
             # Symbol-spezifische Konfiguration
             config_symbol = config.copy()
@@ -119,17 +126,15 @@ while True:
                     if col not in df_to_write.columns:
                         df_to_write[col] = None
                 df_to_write = df_to_write[cols]
-                file_path = "logs/ohlcv_latest.csv"
                 write_header = True
-                if os.path.exists(file_path):
+                if os.path.exists(OHLCV_PATH):
                     try:
-                        write_header = os.path.getsize(file_path) == 0
+                        write_header = os.path.getsize(OHLCV_PATH) == 0
                     except Exception as e:
                         logger.warning(f"[WARN] Konnte Dateigröße nicht prüfen: {e}")
                     # Lade bestehende Daten und filtere Duplikate
                     try:
-                        import pandas as pd
-                        existing = pd.read_csv(file_path)
+                        existing = pd.read_csv(OHLCV_PATH)
                         # Kombiniere timestamp und symbol als eindeutigen Schlüssel
                         existing_keys = set(existing['timestamp'].astype(str) + '_' + existing['symbol'].astype(str))
                         df_to_write.loc[:, 'key'] = df_to_write['timestamp'].astype(str) + '_' + df_to_write['symbol'].astype(str)
@@ -137,7 +142,7 @@ while True:
                     except Exception as e:
                         logger.warning(f"[WARN] Konnte bestehende OHLCV-Daten nicht laden: {e}")
                 if not df_to_write.empty:
-                    df_to_write.to_csv(file_path, mode='a', header=write_header, index=False)
+                    df_to_write.to_csv(OHLCV_PATH, mode='a', header=write_header, index=False)
             except Exception as e:
                 logger.error(f"Fehler beim Schreiben der OHLCV-Daten für {symbol}: {e}")
 
@@ -186,8 +191,12 @@ while True:
                         exit_type=exit_type,
                         signal_reason=None
                     )
-                    # Hier könntest du die Position glattstellen (z.B. Market Sell)
-                    # trader.execute_short_trade(trade)  # Für Spot: Verkauf
+                    # Automatisches Verkaufen bei Trade-Exit
+                    try:
+                        trader.execute_short_trade(trade)
+                        logger.info(f"[MAIN] Automatischer Verkauf ausgeführt für {symbol}.")
+                    except Exception as e:
+                        logger.error(f"Fehler beim automatischen Verkauf für {symbol}: {e}")
                     open_trades[symbol] = None
         time.sleep(30)
     except Exception as e:
