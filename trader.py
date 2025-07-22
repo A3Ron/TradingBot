@@ -140,28 +140,3 @@ class Trader:
         except Exception as e:
             self.logger.warning(f"Konnte Guthaben nicht abrufen, nutze Signal-Volumen: {e}")
             return signal.volume
-
-    def calculate_atr(self, df, period=14):
-        df['H-L'] = df['high'] - df['low']
-        df['H-PC'] = abs(df['high'] - df['close'].shift(1))
-        df['L-PC'] = abs(df['low'] - df['close'].shift(1))
-        df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
-        atr = df['TR'].rolling(window=period).mean().iloc[-1]
-        return atr
-
-    def backtest(self, df, strategy):
-        results = []
-        for i in range(20, len(df)):
-            sub_df = df.iloc[:i]
-            support, resistance = sub_df['low'].rolling(20).min().iloc[-1], sub_df['high'].rolling(20).max().iloc[-1]
-            volume_avg = sub_df['volume'].rolling(20).mean().iloc[-1]
-            signal = strategy.check_signal(sub_df, support, resistance, volume_avg)
-            if signal:
-                results.append({
-                    'timestamp': sub_df['timestamp'].iloc[-1],
-                    'entry': signal.entry,
-                    'stop_loss': signal.stop_loss,
-                    'take_profit': signal.take_profit,
-                    'volume': signal.volume
-                })
-        return results

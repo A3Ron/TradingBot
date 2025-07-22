@@ -68,6 +68,7 @@ while True:
     try:
         from strategy import get_strategy
         open_trades = {}  # symbol -> TradeSignal
+        trade_logger = Logger("logs/trades.csv")
         for symbol in config['trading']['symbols']:
             # Symbol-spezifische Konfiguration
             config_symbol = config.copy()
@@ -127,6 +128,19 @@ while True:
                     result = trader.execute_trade(last_signal)
                     trader.set_stop_loss_take_profit(last_signal.entry, last_signal.stop_loss, last_signal.take_profit)
                     logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
+                    # Logge Trade mit Signal-Grund
+                    signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
+                    trade_logger.log_trade(
+                        symbol=symbol,
+                        entry=last_signal.entry,
+                        exit=None,
+                        stop_loss=last_signal.stop_loss,
+                        take_profit=last_signal.take_profit,
+                        volume=last_signal.volume,
+                        outcome='open',
+                        exit_type=None,
+                        signal_reason=signal_reason
+                    )
                     open_trades[symbol] = last_signal
             else:
                 # 3. Überwache offenen Trade
@@ -134,6 +148,18 @@ while True:
                 if exit_type:
                     logger.info(f"[MAIN] Trade für {symbol} geschlossen: {exit_type}")
                     trader.send_telegram(f"Trade für {symbol} geschlossen: {exit_type}")
+                    # Logge Trade mit Exit-Typ
+                    trade_logger.log_trade(
+                        symbol=symbol,
+                        entry=trade.entry,
+                        exit=df['close'].iloc[-1] if 'close' in df.columns else None,
+                        stop_loss=trade.stop_loss,
+                        take_profit=trade.take_profit,
+                        volume=trade.volume,
+                        outcome='closed',
+                        exit_type=exit_type,
+                        signal_reason=None
+                    )
                     # Hier könntest du die Position glattstellen (z.B. Market Sell)
                     # trader.execute_short_trade(trade)  # Für Spot: Verkauf
                     open_trades[symbol] = None

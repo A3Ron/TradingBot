@@ -125,21 +125,3 @@ class DataFetcher:
                 logger.error(f"[ERROR] Binance fetch_ohlcv failed: {e}")
                 logger.error(traceback.format_exc())
                 raise
-
-    def get_support_resistance(self, df, lookback=20):
-        support = df['low'].rolling(lookback).min().iloc[-1]
-        resistance = df['high'].rolling(lookback).max().iloc[-1]
-        return support, resistance
-
-    def get_volume_average(self, df, lookback=20):
-        return df['volume'].rolling(lookback).mean().iloc[-1]
-
-    def get_last_high_low(self, df):
-        return df['high'].iloc[-1], df['low'].iloc[-1]
-
-# Usage example:
-# with open('config.yaml') as f:
-#     config = yaml.safe_load(f)
-# fetcher = DataFetcher(config)
-# df = fetcher.fetch_ohlcv()
-# support, resistance = fetcher.get_support_resistance(df)
