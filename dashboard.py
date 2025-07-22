@@ -100,16 +100,22 @@ try:
     assets = portfolio.get('assets', [])
     st.write("[DEBUG] Assets list:", assets)
     total_value = portfolio.get('total_value', 0.0)
+    error_msg = None
+    # Fehler aus Portfolio-Response extrahieren, falls vorhanden
+    if 'error' in portfolio:
+        error_msg = portfolio['error']
     if isinstance(assets, list) and len(assets) > 0:
         df_assets = pd.DataFrame(assets)
         show_cols = [c for c in ['asset', 'amount', 'price', 'value'] if c in df_assets.columns]
         if show_cols:
-            st.dataframe(df_assets[show_cols], use_container_width=True)
+            st.dataframe(df_assets[show_cols].fillna("-"), use_container_width=True)
         else:
-            st.dataframe(df_assets, use_container_width=True)
+            st.dataframe(df_assets.fillna("-"), use_container_width=True)
         st.metric("Portfolio Gesamtwert (USD)", f"{total_value:,.2f}")
     else:
         st.info("Keine Assets im Portfolio oder API-Fehler.")
+        if error_msg:
+            st.error(f"Portfolio-Fehler: {error_msg}")
 except Exception as e:
     st.error(f"Fehler beim Laden des Portfolios: {e}")
 

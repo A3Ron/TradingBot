@@ -1,49 +1,71 @@
+
 import ccxt
 import pandas as pd
 import pandas_ta as ta
 import yaml
 import logging
 
-# Logger für Bot-Logdatei einrichten
-logger = logging.getLogger("tradingbot")
-logger.setLevel(logging.INFO)
-logfile_handler = logging.FileHandler("logs/bot.log", encoding="utf-8")
-logfile_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
-if not logger.hasHandlers():
-    logger.addHandler(logfile_handler)
+# Logger für Bot-Logdatei einrichten (robust, mehrfach verwendbar)
+def get_bot_logger():
+    logger = logging.getLogger("tradingbot")
+    logger.setLevel(logging.DEBUG)
+    logfile = "logs/bot.log"
+    if not any(isinstance(h, logging.FileHandler) and h.baseFilename.endswith(logfile) for h in logger.handlers):
+        logfile_handler = logging.FileHandler(logfile, encoding="utf-8")
+        logfile_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        logger.addHandler(logfile_handler)
+    return logger
+
+logger = get_bot_logger()
 
 class DataFetcher:
     def fetch_portfolio(self):
         """Fetches current portfolio balances and asset values from Binance."""
         try:
-            # Get balances
-            balances = self.exchange.fetch_balance()
+            logger.info("[DEBUG] Starte fetch_balance API-Call ...")
+            balances = None
+            try:
+                balances = self.exchange.fetch_balance()
+                logger.info(f"[DEBUG] Binance fetch_balance response: {balances}")
+            except Exception as api_ex:
+                logger.error(f"[ERROR] fetch_balance API-Fehler: {api_ex}")
+                return {'assets': [], 'total_value': 0.0, 'prices': {}}
             assets = []
             total_value = 0.0
             prices = {}
-            # Get tickers for all assets with nonzero balance
+            # Robust: Prüfe, ob 'total' im Response enthalten ist
+            if not balances or 'total' not in balances or not isinstance(balances['total'], dict):
+                logger.error(f"[ERROR] 'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
+                return {'assets': [], 'total_value': 0.0, 'prices': {}}
             for asset, info in balances['total'].items():
-                if info > 0:
-                    symbol = asset + '/USDT'
-                    try:
-                        ticker = self.exchange.fetch_ticker(symbol)
-                        price = ticker['last'] if 'last' in ticker else ticker['close']
-                        value = info * price
-                        prices[asset] = price
-                        total_value += value
-                        assets.append({
-                            'asset': asset,
-                            'amount': info,
-                            'price': price,
-                            'value': value
-                        })
-                    except Exception:
-                        assets.append({
-                            'asset': asset,
-                            'amount': info,
-                            'price': None,
-                            'value': None
-                        })
+                if info is None or info == 0:
+                    continue
+                symbol = asset + '/USDT'
+                try:
+                    ticker = self.exchange.fetch_ticker(symbol)
+                    logger.info(f"[DEBUG] Ticker für {symbol}: {ticker}")
+                    price = ticker.get('last') or ticker.get('close')
+                    if price is None:
+                        logger.warning(f"[WARN] Kein Preis für {symbol} gefunden: {ticker}")
+                        price = 0.0
+                    value = info * price
+                    prices[asset] = price
+                    total_value += value
+                    assets.append({
+                        'asset': asset,
+                        'amount': info,
+                        'price': price,
+                        'value': value
+                    })
+                except Exception as ex:
+                    logger.error(f"[ERROR] Ticker-Fehler für {symbol}: {ex}")
+                    assets.append({
+                        'asset': asset,
+                        'amount': info,
+                        'price': None,
+                        'value': None
+                    })
+            logger.info(f"[DEBUG] Portfolio-Assets: {assets}")
             return {'assets': assets, 'total_value': total_value, 'prices': prices}
         except Exception as e:
             logger.error(f"[ERROR] Portfolio fetch failed: {e}")
