@@ -2,8 +2,9 @@
 import ccxt
 import pandas as pd
 import pandas_ta as ta
-import yaml
 import logging
+from dotenv import load_dotenv
+load_dotenv()
 
 # Logger für Bot-Logdatei einrichten (robust, mehrfach verwendbar)
 def get_bot_logger():
@@ -22,7 +23,16 @@ class DataFetcher:
     def fetch_portfolio(self):
         """Fetches current portfolio balances and asset values from Binance."""
         try:
+            import os
             logger.info("[DEBUG] Starte fetch_balance API-Call ...")
+            # Log API key/secret (nur Anfang und Ende, nicht komplett!)
+            api_key = os.getenv('BINANCE_API_KEY')
+            api_secret = os.getenv('BINANCE_API_SECRET')
+            def mask(s):
+                if not s or len(s) < 6:
+                    return 'None' if not s else '***'
+                return s[:3] + '...' + s[-3:]
+            logger.info(f"[DEBUG] Binance API-Key: {mask(api_key)}, Secret: {mask(api_secret)}")
             balances = None
             try:
                 balances = self.exchange.fetch_balance()
@@ -40,15 +50,9 @@ class DataFetcher:
             for asset, info in balances['total'].items():
                 if info is None or info == 0:
                     continue
-                symbol = asset + '/USDT'
-                try:
-                    ticker = self.exchange.fetch_ticker(symbol)
-                    logger.info(f"[DEBUG] Ticker für {symbol}: {ticker}")
-                    price = ticker.get('last') or ticker.get('close')
-                    if price is None:
-                        logger.warning(f"[WARN] Kein Preis für {symbol} gefunden: {ticker}")
-                        price = 0.0
-                    value = info * price
+                if asset.upper() in ["USDT", "BUSD", "USDC"]:
+                    price = 1.0
+                    value = info
                     prices[asset] = price
                     total_value += value
                     assets.append({
@@ -57,14 +61,32 @@ class DataFetcher:
                         'price': price,
                         'value': value
                     })
-                except Exception as ex:
-                    logger.error(f"[ERROR] Ticker-Fehler für {symbol}: {ex}")
-                    assets.append({
-                        'asset': asset,
-                        'amount': info,
-                        'price': None,
-                        'value': None
-                    })
+                else:
+                    symbol = asset + '/USDT'
+                    try:
+                        ticker = self.exchange.fetch_ticker(symbol)
+                        logger.info(f"[DEBUG] Ticker für {symbol}: {ticker}")
+                        price = ticker.get('last') or ticker.get('close')
+                        if price is None:
+                            logger.warning(f"[WARN] Kein Preis für {symbol} gefunden: {ticker}")
+                            price = 0.0
+                        value = info * price
+                        prices[asset] = price
+                        total_value += value
+                        assets.append({
+                            'asset': asset,
+                            'amount': info,
+                            'price': price,
+                            'value': value
+                        })
+                    except Exception as ex:
+                        logger.error(f"[ERROR] Ticker-Fehler für {symbol}: {ex}")
+                        assets.append({
+                            'asset': asset,
+                            'amount': info,
+                            'price': None,
+                            'value': None
+                        })
             logger.info(f"[DEBUG] Portfolio-Assets: {assets}")
             return {'assets': assets, 'total_value': total_value, 'prices': prices}
         except Exception as e:
@@ -73,6 +95,7 @@ class DataFetcher:
     def __init__(self, config):
         import os
         mode = config['execution']['mode']
+        self.mode = mode  # Save mode for logging
         if mode == 'testnet':
             api_key = os.getenv('BINANCE_API_KEY_TEST')
             api_secret = os.getenv('BINANCE_API_SECRET_TEST')
@@ -89,7 +112,6 @@ class DataFetcher:
                 }
             })
             self.exchange.set_sandbox_mode(True)
-            # Logge den verwendeten Endpunkt
             logger.info(f"[DataFetcher] Testnet API endpoint: {self.exchange.urls['api']['public']}")
             if 'future' in self.exchange.urls['api']['public']:
                 logger.warning('[WARN] Es wird ein Futures-Endpunkt verwendet! Für Spot-Testnet muss https://testnet.binance.vision/api genutzt werden.')
@@ -102,11 +124,18 @@ class DataFetcher:
                 'enableRateLimit': True,
                 'options': {'defaultType': 'spot'},
             })
-        self.symbol = config['trading']['symbol']
-        self.timeframe = config['trading']['timeframe']
+        # Flexible Symbol-Auswahl: 'symbol' oder 'symbols' (Liste)
+        trading_cfg = config.get('trading', {})
+        self.symbol = trading_cfg.get('symbol')
+        self.symbols = trading_cfg.get('symbols')
+        if not self.symbol and self.symbols:
+            # Fallback: Nimm das erste Symbol aus der Liste
+            self.symbol = self.symbols[0] if isinstance(self.symbols, list) and len(self.symbols) > 0 else None
+        self.timeframe = trading_cfg.get('timeframe')
 
     def fetch_ohlcv(self, limit=50):
         import requests
+        logger.info(f"[DEBUG] fetch_ohlcv called (mode: {getattr(self, 'mode', 'unknown')}, url: {getattr(self.exchange, 'urls', {}).get('api', {}).get('public', 'n/a')})")
         if hasattr(self, 'exchange') and hasattr(self.exchange, 'urls') and self.exchange.urls['api']['public'].startswith('https://testnet.binance.vision'):
             # Hole Daten direkt vom Spot-Testnet
             logger.info('[INFO] Fetching OHLCV from Binance Spot Testnet via HTTP')
@@ -118,6 +147,7 @@ class DataFetcher:
             }
             try:
                 response = requests.get(base_url, params=params, timeout=10)
+                logger.info(f"[DEBUG] HTTP Response (Spot Testnet OHLCV): {response.status_code} {response.text[:500]}")
                 if response.status_code != 200:
                     logger.error(f'[ERROR] HTTP Request failed: {response.text}')
                     response.raise_for_status()
@@ -138,6 +168,7 @@ class DataFetcher:
         else:
             try:
                 ohlcv = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=limit)
+                logger.info(f"[DEBUG] fetch_ohlcv API response: {ohlcv[:3]} ... total {len(ohlcv)} rows")
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 logger.info(f"[OHLCV] Fetched {len(df)} rows for {self.symbol} {self.timeframe} (limit={limit})")

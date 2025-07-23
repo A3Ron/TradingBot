@@ -1,6 +1,6 @@
 binance:
-  api_key: ${BINANCE_API_KEY_TEST}
-  api_secret: ${BINANCE_API_SECRET_TEST}
+  api_key: ${BINANCE_API_KEY}
+  api_secret: ${BINANCE_API_SECRET}
 trading:
   symbols:
   - BTC/USDT
