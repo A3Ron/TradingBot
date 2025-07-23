@@ -6,9 +6,9 @@ params:
   stop_loss_pct: 0.03
   take_profit_pct: 0.08
   trailing_trigger_pct: 0.05
-  price_change_pct: 0.03
-  volume_mult: 2.0
-  rsi_long: 60
+  price_change_pct: 0.02
+  volume_mult: 1.5
+  rsi_long: 58
   rsi_short: 40
   rsi_tp_exit: 50
   momentum_exit_rsi: 50

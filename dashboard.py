@@ -212,8 +212,9 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         ohlcv_df = pd.read_csv(ohlcv_latest_path)
         # Zeitstempel als datetime parsen
         ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'])
-        symbols = ohlcv_df['symbol'].unique() if 'symbol' in ohlcv_df.columns else []
-        selected_symbol = st.selectbox("Symbol wählen", symbols) if len(symbols) > 0 else None
+        # Symbole nur aus Datei, dynamisch
+        file_symbols = sorted(ohlcv_df['symbol'].unique()) if 'symbol' in ohlcv_df.columns else []
+        selected_symbol = st.selectbox("Symbol wählen", file_symbols) if len(file_symbols) > 0 else None
         # Zeitraum-Optionen
         time_ranges = {
             "5m": timedelta(minutes=5),

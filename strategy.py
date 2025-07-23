@@ -69,8 +69,8 @@ class HighVolatilityBreakoutMomentumStrategy:
 
     def check_signal(self, df):
         df = df.copy()
-        # Preisänderung und Volumen
-        df['price_change'] = df['close'].pct_change(periods=1)
+        # Preisänderung über self.window-Intervall
+        df['price_change'] = df['close'].pct_change(periods=self.window)
         df['vol_mean'] = df['volume'].rolling(window=self.window, min_periods=1).mean().shift(1)
         df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
         last = df.iloc[-1]
@@ -99,7 +99,7 @@ class HighVolatilityBreakoutMomentumStrategy:
 
     def get_signals_and_reasons(self, df):
         df = df.copy()
-        df['price_change'] = df['close'].pct_change(periods=1)
+        df['price_change'] = df['close'].pct_change(periods=self.window)
         df['vol_mean'] = df['volume'].rolling(window=self.window, min_periods=1).mean().shift(1)
         df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
         signal_mask_long = (
@@ -113,23 +113,32 @@ class HighVolatilityBreakoutMomentumStrategy:
             (df['rsi'] < self.rsi_short)
         )
         reasons = []
+        prev_rsi = df['rsi'].shift(1)
         for i, row in df.iterrows():
+            price_chg = row['price_change'] * 100 if pd.notnull(row['price_change']) else None
+            vol_mult = row['volume'] / row['vol_mean'] if pd.notnull(row['vol_mean']) and row['vol_mean'] != 0 else None
+            rsi_val = row['rsi'] if pd.notnull(row['rsi']) else None
+            rsi_delta = row['rsi'] - prev_rsi[i] if pd.notnull(row['rsi']) and pd.notnull(prev_rsi[i]) else None
             if signal_mask_long.loc[i]:
-                reasons.append('Long Signal: Preis > +{:.1f}%, Vol > {:.1f}x, RSI > {}'.format(self.price_change_pct*100, self.volume_mult, self.rsi_long))
+                reasons.append('Long Signal: Preis > +{:.2f}% (Schwelle: {:.2f}%), Vol > {:.2f}x (Schwelle: {:.2f}x), RSI > {:.2f} (Schwelle: {})'.format(
+                    price_chg, self.price_change_pct*100, vol_mult, self.volume_mult, rsi_val, self.rsi_long))
             elif signal_mask_short.loc[i]:
-                reasons.append('Short Signal: Preis < -{:.1f}%, Vol > {:.1f}x, RSI < {}'.format(self.price_change_pct*100, self.volume_mult, self.rsi_short))
+                reasons.append('Short Signal: Preis < -{:.2f}% (Schwelle: -{:.2f}%), Vol > {:.2f}x (Schwelle: {:.2f}x), RSI < {:.2f} (Schwelle: {})'.format(
+                    price_chg, self.price_change_pct*100, vol_mult, self.volume_mult, rsi_val, self.rsi_short))
             else:
                 r = []
                 if not (row['price_change'] > self.price_change_pct):
-                    r.append('Preisänderung zu gering')
+                    r.append('Preisänderung zu gering ({:.2f}% / Schwelle: {:.2f}%)'.format(price_chg if price_chg is not None else float('nan'), self.price_change_pct*100))
                 if not (row['price_change'] < -self.price_change_pct):
-                    r.append('Preisfall zu gering')
+                    r.append('Preisfall zu gering ({:.2f}% / Schwelle: -{:.2f}%)'.format(price_chg if price_chg is not None else float('nan'), self.price_change_pct*100))
                 if not (row['volume'] > self.volume_mult * row['vol_mean']):
-                    r.append('Volumen nicht hoch genug')
+                    r.append('Volumen nicht hoch genug ({:.2f}x / Schwelle: {:.2f}x)'.format(vol_mult if vol_mult is not None else float('nan'), self.volume_mult))
                 if not (row['rsi'] > self.rsi_long):
-                    r.append('RSI nicht hoch genug (Long)')
+                    r.append('RSI nicht hoch genug (Long) ({:.2f} / Schwelle: {})'.format(rsi_val if rsi_val is not None else float('nan'), self.rsi_long))
                 if not (row['rsi'] < self.rsi_short):
-                    r.append('RSI nicht tief genug (Short)')
+                    r.append('RSI nicht tief genug (Short) ({:.2f} / Schwelle: {})'.format(rsi_val if rsi_val is not None else float('nan'), self.rsi_short))
+                if rsi_delta is not None:
+                    r.append('RSI-Delta: {:.2f}'.format(rsi_delta))
                 reasons.append(', '.join(r) if r else 'No Signal')
         df['signal'] = signal_mask_long | signal_mask_short
         df['signal_reason'] = reasons

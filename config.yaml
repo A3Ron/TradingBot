@@ -6,7 +6,10 @@ trading:
   - BTC/USDT
   - ETH/USDT
   - BNB/USDT
-  timeframe: 1m
+  - SOL/USDT
+  - PEPE/USDT
+  - SUI/USDT
+  timeframe: 5m
   stake_percent: 0.02
   futures: false
 execution:

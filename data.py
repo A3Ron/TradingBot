@@ -105,7 +105,7 @@ class DataFetcher:
         self.symbol = config['trading']['symbol']
         self.timeframe = config['trading']['timeframe']
 
-    def fetch_ohlcv(self, limit=5):
+    def fetch_ohlcv(self, limit=50):
         import requests
         if hasattr(self, 'exchange') and hasattr(self.exchange, 'urls') and self.exchange.urls['api']['public'].startswith('https://testnet.binance.vision'):
             # Hole Daten direkt vom Spot-Testnet
