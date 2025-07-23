@@ -5,6 +5,8 @@ import os
 import yaml
 import subprocess
 import signal
+from dotenv import load_dotenv
+load_dotenv()
 
 # --- Function Definitions ---
 def load_trades(log_path):
@@ -95,11 +97,8 @@ try:
     with open('config.yaml') as f:
         config_portfolio = yaml.safe_load(f)
     fetcher = DataFetcher(config_portfolio)
-    st.write("[DEBUG] Portfolio raw:", fetcher)
     portfolio = fetcher.fetch_portfolio()
-    st.write("[DEBUG] Portfolio raw:", portfolio)
     assets = portfolio.get('assets', [])
-    st.write("[DEBUG] Assets list:", assets)
     total_value = portfolio.get('total_value', 0.0)
     error_msg = None
     # Fehler aus Portfolio-Response extrahieren, falls vorhanden
@@ -107,8 +106,6 @@ try:
         error_msg = portfolio['error']
     if isinstance(assets, list) and len(assets) > 0:
         df_assets = pd.DataFrame(assets)
-        st.write("Spalten im df_assets:", df_assets.columns.tolist())
-        st.write("Erste Zeile:", df_assets.iloc[0] if not df_assets.empty else "leer")
         show_cols = [c for c in ['asset', 'amount', 'price', 'value'] if c in df_assets.columns]
         if show_cols:
             st.dataframe(df_assets[show_cols].fillna("-"), use_container_width=True)

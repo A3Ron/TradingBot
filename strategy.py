@@ -1,6 +1,8 @@
 import pandas as pd
 import yaml
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 class TradeSignal:
     def __init__(self, signal_type, entry, stop_loss, take_profit, volume):
