@@ -5,8 +5,12 @@ import os
 import yaml
 import subprocess
 import signal
+from streamlit_autorefresh import st_autorefresh
 from dotenv import load_dotenv
 load_dotenv()
+
+# Alle 30 Sekunden neu laden
+st_autorefresh(interval=30 * 1000, key="refresh")
 
 # --- Function Definitions ---
 def load_trades(log_path):
@@ -107,8 +111,8 @@ with col_btn:
 
 st.markdown(f"**Bot Status:** {'🟢 Läuft (PID: ' + str(pid) + ')' if running else '🔴 Gestoppt'}")
 
-# Portfolio Panel
 
+# Portfolio Panel mit Session-State für Asset-Auswahl
 with st.expander("Portfolio Übersicht", expanded=True):
     try:
         from data import DataFetcher
@@ -119,16 +123,21 @@ with st.expander("Portfolio Übersicht", expanded=True):
         assets = portfolio.get('assets', [])
         total_value = portfolio.get('total_value', 0.0)
         error_msg = None
-        # Fehler aus Portfolio-Response extrahieren, falls vorhanden
         if 'error' in portfolio:
             error_msg = portfolio['error']
         if isinstance(assets, list) and len(assets) > 0:
             df_assets = pd.DataFrame(assets)
             show_cols = [c for c in ['asset', 'amount', 'price', 'value'] if c in df_assets.columns]
-            if show_cols:
-                st.dataframe(df_assets[show_cols].fillna("-"), use_container_width=True)
+            # Session-State für Asset-Auswahl
+            asset_names = df_assets['asset'].tolist() if 'asset' in df_assets.columns else []
+            if asset_names:
+                if 'selected_asset' not in st.session_state or st.session_state['selected_asset'] not in asset_names:
+                    st.session_state['selected_asset'] = asset_names[0]
+                selected_asset = st.selectbox("Asset wählen", asset_names, key='selected_asset')
+                df_assets_sel = df_assets[df_assets['asset'] == selected_asset]
+                st.dataframe(df_assets_sel[show_cols].fillna("-"), use_container_width=True)
             else:
-                st.dataframe(df_assets.fillna("-"), use_container_width=True)
+                st.dataframe(df_assets[show_cols].fillna("-"), use_container_width=True)
             st.metric("Portfolio Gesamtwert (USD)", f"{total_value:,.2f}")
         else:
             st.info("Keine Assets im Portfolio oder API-Fehler.")
@@ -137,7 +146,7 @@ with st.expander("Portfolio Übersicht", expanded=True):
     except Exception as e:
         import traceback
         st.error(f"Fehler beim Laden des Portfolios: {e}")
-        st.text(traceback.format_exc())  # ← Zeigt Stacktrace an!
+        st.text(traceback.format_exc())
 
 # Strategie
 with st.expander("Strategie", expanded=False):
@@ -218,14 +227,23 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'])
         # Symbole nur aus Datei, dynamisch
         file_symbols = sorted(ohlcv_df['symbol'].unique()) if 'symbol' in ohlcv_df.columns else []
-        selected_symbol = st.selectbox("Symbol wählen", file_symbols) if len(file_symbols) > 0 else None
-        # Zeitraum-Optionen
+        # Session-State für Symbol
+        if file_symbols:
+            if 'selected_symbol' not in st.session_state or st.session_state['selected_symbol'] not in file_symbols:
+                st.session_state['selected_symbol'] = file_symbols[0]
+            selected_symbol = st.selectbox("Symbol wählen", file_symbols, key='selected_symbol')
+        else:
+            selected_symbol = None
+        # Zeitraum-Optionen mit Session-State
         time_ranges = {
             "5m": timedelta(minutes=5),
             "1h": timedelta(hours=1),
             "24h": timedelta(hours=24)
         }
-        selected_range = st.selectbox("Zeitraum", list(time_ranges.keys()), index=1)
+        time_range_keys = list(time_ranges.keys())
+        if 'selected_range' not in st.session_state or st.session_state['selected_range'] not in time_range_keys:
+            st.session_state['selected_range'] = time_range_keys[1]
+        selected_range = st.selectbox("Zeitraum", time_range_keys, key='selected_range')
         now = ohlcv_df['timestamp'].max()
         time_filter = now - time_ranges[selected_range]
         chart_cols = ["open", "high", "low", "close"]

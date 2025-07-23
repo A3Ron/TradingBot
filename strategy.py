@@ -39,8 +39,6 @@ class HighVolatilityBreakoutMomentumStrategy:
     def __init__(self, strategy_cfg):
         self.config = strategy_cfg
         self.params = strategy_cfg.get('params', {})
-        self.risk_percent = strategy_cfg.get('risk_percent', 1)
-        self.reward_ratio = strategy_cfg.get('reward_ratio', 2)
         self.stop_loss_pct = float(self.params.get('stop_loss_pct', 0.03)) # 3%
         self.take_profit_pct = float(self.params.get('take_profit_pct', 0.08)) # 8%
         self.trailing_trigger_pct = float(self.params.get('trailing_trigger_pct', 0.05)) # 5%
@@ -51,7 +49,7 @@ class HighVolatilityBreakoutMomentumStrategy:
         self.rsi_tp_exit = int(self.params.get('rsi_tp_exit', 50))
         self.momentum_exit_rsi = int(self.params.get('momentum_exit_rsi', 50))
         self.rsi_period = int(self.params.get('rsi_period', 14))
-        self.window = int(self.params.get('window', 5)) # 5h
+        self.price_change_periods = int(self.params.get('price_change_periods', 12)) # 12 Perioden
     def should_exit_momentum(self, df):
         """
         Prüft, ob ein Momentum-Exit (RSI < momentum_exit_rsi) ausgelöst werden sollte.
@@ -71,9 +69,9 @@ class HighVolatilityBreakoutMomentumStrategy:
 
     def check_signal(self, df):
         df = df.copy()
-        # Preisänderung über self.window-Intervall
-        df['price_change'] = df['close'].pct_change(periods=self.window)
-        df['vol_mean'] = df['volume'].rolling(window=self.window, min_periods=1).mean().shift(1)
+        # Preisänderung über self.price_change_periods-Intervall
+        df['price_change'] = df['close'].pct_change(periods=self.price_change_periods)
+        df['vol_mean'] = df['volume'].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
         df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
         last = df.iloc[-1]
         # Long
@@ -101,8 +99,8 @@ class HighVolatilityBreakoutMomentumStrategy:
 
     def get_signals_and_reasons(self, df):
         df = df.copy()
-        df['price_change'] = df['close'].pct_change(periods=self.window)
-        df['vol_mean'] = df['volume'].rolling(window=self.window, min_periods=1).mean().shift(1)
+        df['price_change'] = df['close'].pct_change(periods=self.price_change_periods)
+        df['vol_mean'] = df['volume'].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
         df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
         signal_mask_long = (
             (df['price_change'] > self.price_change_pct) &

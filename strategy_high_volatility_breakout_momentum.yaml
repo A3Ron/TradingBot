@@ -1,16 +1,16 @@
 name: high_volatility_breakout_momentum
 risk_percent: 20.0 # Prozent des Kapitals, das pro Trade riskiert wird
-reward_ratio: 2.0
-stop_loss_buffer: 0.0
+stop_loss_buffer: 0.0 # Buffer für Stop-Loss, um Slippage zu vermeiden
 params:
-  stop_loss_pct: 0.03
-  take_profit_pct: 0.08
-  trailing_trigger_pct: 0.05
-  price_change_pct: 0.02
-  volume_mult: 1.5
-  rsi_long: 58
-  rsi_short: 40
-  rsi_tp_exit: 50
-  momentum_exit_rsi: 50
+  stop_loss_pct: 0.03 # 3% Stop-Loss
+  take_profit_pct: 0.08 # 8% Take-Profit
+  trailing_trigger_pct: 0.05 # Trailing Stop wird bei 5% Gewinn aktiviert
+  price_change_pct: 0.02 # 2% Preisänderung für Long-Signal
+  price_change_periods: 12 # 12 Perioden für Preisänderung
+  volume_mult: 1.5 # Multiplikator für Volumen
+  rsi_long: 58 # RSI-Schwelle für Long-Einstieg
+  rsi_short: 40 # RSI-Schwelle für Short-Einstieg
+  rsi_tp_exit: 50 # RSI-Schwelle für Take-Profit-Exit
+  rsi_period: 14 # RSI-Berechnungsperiode
+  momentum_exit_rsi: 50 # RSI-Schwelle für Momentum-Exit
   trailing_stop_trigger_pct: 0.05  # Bei +5% Gewinn wird Trailing Stop aktiviert
-  window: 5
