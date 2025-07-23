@@ -83,7 +83,7 @@ class Trader:
             self.send_telegram(f"LONG Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
-    def set_stop_loss_take_profit(self, entry, stop_loss, take_profit):
+    def set_stop_loss_take_profit(self, _, stop_loss, take_profit):
         self.logger.info(f"Set SL: {stop_loss}, TP: {take_profit}")
         # Implement OCO or manual orders if needed
         self.send_telegram(f"Set SL: {stop_loss}, TP: {take_profit}")
