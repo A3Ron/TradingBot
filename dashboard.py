@@ -213,11 +213,6 @@ with st.expander("Bot Einstellungen", expanded=False):
             "Max Trades/Tag": config.get('execution', {}).get('max_trades_per_day'),
         })
 
-if not df.empty:
-    st.subheader("Performance")
-    st.write(f"Total Trades: {len(df)}")
-    st.write(f"Open Trades: {(df['outcome'] == 'open').sum()}" )
-    st.write(f"Closed Trades: {(df['outcome'] != 'open').sum()}" )
 
 # Panel für die zuletzt gefetchten Binance-Daten
 with st.expander("Binance OHLCV Daten", expanded=False):
