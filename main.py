@@ -27,7 +27,6 @@ def format_startup_message(config):
     except Exception:
         strategy_cfg = {}
     risk_percent = config['trading'].get('risk_percent', strategy_cfg.get('risk_percent', ''))
-    stop_loss_buffer = config['trading'].get('stop_loss_buffer', strategy_cfg.get('stop_loss_buffer', ''))
     stake_percent = config['trading'].get('stake_percent', '')
     futures = config['trading'].get('futures', '')
     params = strategy_cfg.get('params', {})

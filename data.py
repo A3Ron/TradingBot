@@ -1,4 +1,3 @@
-
 import ccxt
 import pandas as pd
 import pandas_ta as ta
@@ -21,6 +20,108 @@ def get_bot_logger():
 logger = get_bot_logger()
 
 class DataFetcher:
+
+    def get_spot_symbols(self):
+        """Liefert alle verfügbaren Spot-Symbole im Format BASE/QUOTE (z.B. BTC/USDT)."""
+        try:
+            markets = self.exchange.load_markets()
+            return sorted([m.replace('_', '/') for m in markets if markets[m]['spot'] and markets[m]['active'] and '/' in m])
+        except Exception as e:
+            logger.error(f"[ERROR] Spot-Symbole konnten nicht geladen werden: {e}")
+            return []
+
+    def get_futures_symbols(self):
+        """Liefert alle verfügbaren USDT-M Perpetual Futures-Symbole im Format BASEUSDT (z.B. PEPEUSDT, BTCUSDT) direkt von der Binance REST-API."""
+        import requests
+        try:
+            url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+            resp = requests.get(url, timeout=10)
+            if resp.status_code != 200:
+                logger.error(f"[ERROR] Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}")
+                return []
+            data = resp.json()
+            return sorted([
+                s['symbol']
+                for s in data['symbols']
+                if s['contractType'] == 'PERPETUAL'
+                and s['quoteAsset'] == 'USDT'
+                and s['status'] == 'TRADING'
+            ])
+        except Exception as e:
+            logger.error(f"[ERROR] Futures-Symbole konnten nicht geladen werden: {e}")
+            return []
+
+    def __init__(self, config):
+        self.config = config
+        self._init_exchange()
+        trading_cfg = config.get('trading', {})
+        self.symbol = trading_cfg.get('symbol')
+        self.symbols = trading_cfg.get('symbols')
+        if not self.symbol and self.symbols:
+            self.symbol = self.symbols[0] if isinstance(self.symbols, list) and len(self.symbols) > 0 else None
+        self.timeframe = trading_cfg.get('timeframe')
+
+    def _init_exchange(self):
+        import os
+        mode = self.config['execution']['mode']
+        is_futures = self.config.get('trading', {}).get('futures', False)
+        if mode == 'testnet':
+            api_key = os.getenv('BINANCE_API_KEY_TEST')
+            api_secret = os.getenv('BINANCE_API_SECRET_TEST')
+            options = {'defaultType': 'future' if is_futures else 'spot'}
+            urls = None
+            if not is_futures:
+                urls = {
+                    'api': {
+                        'public': 'https://testnet.binance.vision/api',
+                        'private': 'https://testnet.binance.vision/api',
+                    }
+                }
+            self.exchange = ccxt.binance({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'enableRateLimit': True,
+                'options': options,
+                **({'urls': urls} if urls else {})
+            })
+            self.exchange.set_sandbox_mode(True)
+        else:
+            api_key = os.getenv('BINANCE_API_KEY')
+            api_secret = os.getenv('BINANCE_API_SECRET')
+            # Für Futures: explizit USDT-M Perpetual Optionen setzen
+            if is_futures:
+                options = {'defaultType': 'future', 'contractType': 'PERPETUAL'}
+            else:
+                options = {'defaultType': 'spot'}
+            self.exchange = ccxt.binance({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'enableRateLimit': True,
+                'options': options,
+            })
+
+    def fetch_full_portfolio(self):
+        """Holt Spot- und Futures-Portfolio getrennt und gibt beide plus das Total zurück."""
+        import copy
+        spot_config = copy.deepcopy(self.config)
+        spot_config['trading']['futures'] = False
+        futures_config = copy.deepcopy(self.config)
+        futures_config['trading']['futures'] = True
+        spot_fetcher = DataFetcher(spot_config)
+        futures_fetcher = DataFetcher(futures_config)
+        spot = spot_fetcher.fetch_portfolio()
+        futures = futures_fetcher.fetch_portfolio()
+        total_value = 0.0
+        if spot and 'total_value' in spot:
+            total_value += spot['total_value']
+        if futures and 'total_value' in futures:
+            total_value += futures['total_value']
+        return {
+            'spot': spot,
+            'futures': futures,
+            'total_value': total_value
+        }
+
     def fetch_portfolio(self):
         """Fetches current portfolio balances and asset values from Binance."""
         try:
@@ -33,7 +134,6 @@ class DataFetcher:
             assets = []
             total_value = 0.0
             prices = {}
-            # Robust: Prüfe, ob 'total' im Response enthalten ist
             if not balances or 'total' not in balances or not isinstance(balances['total'], dict):
                 logger.error(f"[ERROR] 'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
                 return {'assets': [], 'total_value': 0.0, 'prices': {}}
@@ -80,44 +180,6 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"[ERROR] Portfolio fetch failed: {e}")
             return {'assets': [], 'total_value': 0.0, 'prices': {}}
-    def __init__(self, config):
-        import os
-        mode = config['execution']['mode']
-        self.mode = mode
-        if mode == 'testnet':
-            api_key = os.getenv('BINANCE_API_KEY_TEST')
-            api_secret = os.getenv('BINANCE_API_SECRET_TEST')
-            self.exchange = ccxt.binance({
-                'apiKey': api_key,
-                'secret': api_secret,
-                'enableRateLimit': True,
-                'options': {'defaultType': 'spot'},
-                'urls': {
-                    'api': {
-                        'public': 'https://testnet.binance.vision/api',
-                        'private': 'https://testnet.binance.vision/api',
-                    }
-                }
-            })
-            self.exchange.set_sandbox_mode(True)
-            if 'future' in self.exchange.urls['api']['public']:
-                logger.warning('[WARN] Es wird ein Futures-Endpunkt verwendet! Für Spot-Testnet muss https://testnet.binance.vision/api genutzt werden.')
-        else:
-            api_key = os.getenv('BINANCE_API_KEY')
-            api_secret = os.getenv('BINANCE_API_SECRET')
-            self.exchange = ccxt.binance({
-                'apiKey': api_key,
-                'secret': api_secret,
-                'enableRateLimit': True,
-                'options': {'defaultType': 'spot'},
-            })
-        trading_cfg = config.get('trading', {})
-        self.symbol = trading_cfg.get('symbol')
-        self.symbols = trading_cfg.get('symbols')
-        if not self.symbol and self.symbols:
-            # Fallback: Nimm das erste Symbol aus der Liste
-            self.symbol = self.symbols[0] if isinstance(self.symbols, list) and len(self.symbols) > 0 else None
-        self.timeframe = trading_cfg.get('timeframe')
 
     def fetch_ohlcv(self, limit=50):
         import requests
