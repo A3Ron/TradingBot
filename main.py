@@ -111,36 +111,38 @@ while True:
             # --- Zentrale Signal- und Grundberechnung ---
             df = strategy.get_signals_and_reasons(df)
             # --- Schreibe die zuletzt gefetchten OHLCV-Daten aller Symbole in ein gemeinsames File ---
-            try:
-                df_latest = df.copy()
-                df_latest.insert(1, 'symbol', symbol)
-                # Nur die letzten 50 Zeilen pro Symbol speichern
-                df_to_write = df_latest.tail(50).copy()
-                # Stelle sicher, dass alle neuen Spalten enthalten sind
-                cols = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'resistance', 'vol_mean', 'signal', 'signal_reason']
-                for col in cols:
-                    if col not in df_to_write.columns:
-                        df_to_write[col] = None
-                df_to_write = df_to_write[cols]
-                write_header = True
-                if os.path.exists(OHLCV_PATH):
-                    try:
-                        write_header = os.path.getsize(OHLCV_PATH) == 0
-                    except Exception as e:
-                        logger.warning(f"[WARN] Konnte Dateigröße nicht prüfen: {e}")
-                    # Lade bestehende Daten und filtere Duplikate
-                    try:
-                        existing = pd.read_csv(OHLCV_PATH)
-                        # Kombiniere timestamp und symbol als eindeutigen Schlüssel
-                        existing_keys = set(existing['timestamp'].astype(str) + '_' + existing['symbol'].astype(str))
-                        df_to_write.loc[:, 'key'] = df_to_write['timestamp'].astype(str) + '_' + df_to_write['symbol'].astype(str)
-                        df_to_write = df_to_write[~df_to_write['key'].isin(existing_keys)].drop(columns=['key'])
-                    except Exception as e:
-                        logger.warning(f"[WARN] Konnte bestehende OHLCV-Daten nicht laden: {e}")
-                if not df_to_write.empty:
-                    df_to_write.to_csv(OHLCV_PATH, mode='a', header=write_header, index=False)
-            except Exception as e:
-                logger.error(f"Fehler beim Schreiben der OHLCV-Daten für {symbol}: {e}")
+            def write_ohlcv_latest():
+                try:
+                    df_latest = df.copy()
+                    df_latest.insert(1, 'symbol', symbol)
+                    # Nur die letzten 50 Zeilen pro Symbol speichern
+                    df_to_write = df_latest.tail(50).copy()
+                    # Stelle sicher, dass alle neuen Spalten enthalten sind
+                    cols = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'resistance', 'vol_mean', 'signal', 'signal_reason']
+                    for col in cols:
+                        if col not in df_to_write.columns:
+                            df_to_write[col] = None
+                    df_to_write = df_to_write[cols]
+                    write_header = True
+                    if os.path.exists(OHLCV_PATH):
+                        try:
+                            write_header = os.path.getsize(OHLCV_PATH) == 0
+                        except Exception as e:
+                            logger.warning(f"[WARN] Konnte Dateigröße nicht prüfen: {e}")
+                        # Lade bestehende Daten und filtere Duplikate
+                        try:
+                            existing = pd.read_csv(OHLCV_PATH)
+                            # Kombiniere timestamp und symbol als eindeutigen Schlüssel
+                            existing_keys = set(existing['timestamp'].astype(str) + '_' + existing['symbol'].astype(str))
+                            df_to_write.loc[:, 'key'] = df_to_write['timestamp'].astype(str) + '_' + df_to_write['symbol'].astype(str)
+                            df_to_write = df_to_write[~df_to_write['key'].isin(existing_keys)].drop(columns=['key'])
+                        except Exception as e:
+                            logger.warning(f"[WARN] Konnte bestehende OHLCV-Daten nicht laden: {e}")
+                    if not df_to_write.empty:
+                        df_to_write.to_csv(OHLCV_PATH, mode='a', header=write_header, index=False)
+                except Exception as e:
+                    logger.error(f"Fehler beim Schreiben der OHLCV-Daten für {symbol}: {e}")
+
 
             # --- Trade-Überwachung & Ausführung ---
             # 1. Prüfe, ob ein Trade offen ist
@@ -152,6 +154,7 @@ while True:
                     last_signal = strategy.check_signal(df)
                 if last_signal:
                     logger.info(f"[MAIN] Trade-Signal erkannt für {symbol}: {last_signal}")
+                    write_ohlcv_latest()  # Schreibe OHLCV-Daten IMMER, sobald ein Signal erkannt wurde
                     try:
                         if hasattr(last_signal, 'signal_type') and last_signal.signal_type == 'short':
                             result = trader.execute_short_trade(last_signal)
