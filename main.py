@@ -143,6 +143,7 @@ while True:
                 except Exception as e:
                     logger.error(f"Fehler beim Schreiben der OHLCV-Daten für {symbol}: {e}")
 
+            write_ohlcv_latest()  # Immer die neuesten OHLCV-Daten schreiben
 
             # --- Trade-Überwachung & Ausführung ---
             # 1. Prüfe, ob ein Trade offen ist
@@ -154,7 +155,7 @@ while True:
                     last_signal = strategy.check_signal(df)
                 if last_signal:
                     logger.info(f"[MAIN] Trade-Signal erkannt für {symbol}: {last_signal}")
-                    write_ohlcv_latest()  # Schreibe OHLCV-Daten IMMER, sobald ein Signal erkannt wurde
+                    
                     try:
                         if hasattr(last_signal, 'signal_type') and last_signal.signal_type == 'short':
                             result = trader.execute_short_trade(last_signal)
