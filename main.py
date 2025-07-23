@@ -1,5 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv()
 import os
 import yaml
 import time
@@ -29,7 +27,6 @@ def format_startup_message(config):
     except Exception:
         strategy_cfg = {}
     risk_percent = config['trading'].get('risk_percent', strategy_cfg.get('risk_percent', ''))
-    reward_ratio = config['trading'].get('reward_ratio', strategy_cfg.get('reward_ratio', ''))
     stop_loss_buffer = config['trading'].get('stop_loss_buffer', strategy_cfg.get('stop_loss_buffer', ''))
     stake_percent = config['trading'].get('stake_percent', '')
     futures = config['trading'].get('futures', '')
@@ -44,8 +41,6 @@ def format_startup_message(config):
         f"Risk/Trade: {risk_percent}%\n"
         f"Stake/Trade: {stake_percent}\n"
         f"Futures: {futures}\n"
-        f"Reward Ratio: {reward_ratio}\n"
-        f"Stop-Loss Buffer: {stop_loss_buffer}\n"
         f"Max Trades/Tag: {config['execution']['max_trades_per_day']}\n"
         f"--- Strategie-Parameter ---\n"
         f"Stop-Loss %: {params.get('stop_loss_pct', '')}\n"
@@ -58,7 +53,7 @@ def format_startup_message(config):
         f"RSI TP Exit: {params.get('rsi_tp_exit', '')}\n"
         f"Momentum Exit RSI: {params.get('momentum_exit_rsi', '')}\n"
         f"Trailing Stop Trigger %: {params.get('trailing_stop_trigger_pct', '')}\n"
-        f"Window: {params.get('window', '')}\n"
+        f"Price Change Periods: {params.get('price_change_periods', '')}\n"
     )
     return msg
 
@@ -112,7 +107,6 @@ while True:
             data_fetcher = DataFetcher(config_symbol)
             strategy = get_strategy(config_symbol)
             trader = Trader(config_symbol)
-            logger.info(f"[MAIN] Lade Daten für {symbol} {config_symbol['trading']['timeframe']}")
             df = data_fetcher.fetch_ohlcv(limit=50)
             # --- Zentrale Signal- und Grundberechnung ---
             df = strategy.get_signals_and_reasons(df)
@@ -120,8 +114,8 @@ while True:
             try:
                 df_latest = df.copy()
                 df_latest.insert(1, 'symbol', symbol)
-                # Nur die letzten 2 Zeilen pro Symbol speichern
-                df_to_write = df_latest.tail(2).copy()
+                # Nur die letzten 50 Zeilen pro Symbol speichern
+                df_to_write = df_latest.tail(50).copy()
                 # Stelle sicher, dass alle neuen Spalten enthalten sind
                 cols = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'resistance', 'vol_mean', 'signal', 'signal_reason']
                 for col in cols:
@@ -158,23 +152,27 @@ while True:
                     last_signal = strategy.check_signal(df)
                 if last_signal:
                     logger.info(f"[MAIN] Trade-Signal erkannt für {symbol}: {last_signal}")
-                    result = trader.execute_trade(last_signal)
-                    trader.set_stop_loss_take_profit(last_signal.entry, last_signal.stop_loss, last_signal.take_profit)
-                    logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
-                    # Logge Trade mit Signal-Grund
-                    signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
-                    trade_logger.log_trade(
-                        symbol=symbol,
-                        entry=last_signal.entry,
-                        exit=None,
-                        stop_loss=last_signal.stop_loss,
-                        take_profit=last_signal.take_profit,
-                        volume=last_signal.volume,
-                        outcome='open',
-                        exit_type=None,
-                        signal_reason=signal_reason
-                    )
-                    open_trades[symbol] = last_signal
+                    try:
+                        result = trader.execute_trade(last_signal)
+                        logger.info(f"[MAIN] execute_trade response für {symbol}: {result}")
+                        trader.set_stop_loss_take_profit(last_signal.entry, last_signal.stop_loss, last_signal.take_profit)
+                        logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
+                        # Logge Trade mit Signal-Grund
+                        signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
+                        trade_logger.log_trade(
+                            symbol=symbol,
+                            entry=last_signal.entry,
+                            exit=None,
+                            stop_loss=last_signal.stop_loss,
+                            take_profit=last_signal.take_profit,
+                            volume=last_signal.volume,
+                            outcome='open',
+                            exit_type=None,
+                            signal_reason=signal_reason
+                        )
+                        open_trades[symbol] = last_signal
+                    except Exception as e:
+                        logger.error(f"Fehler beim Ausführen des Trades für {symbol}: {e}")
             else:
                 # 3. Überwache offenen Trade
                 exit_type = trader.monitor_trade(trade, df, strategy)
@@ -195,7 +193,8 @@ while True:
                     )
                     # Automatisches Verkaufen bei Trade-Exit
                     try:
-                        trader.execute_short_trade(trade)
+                        short_result = trader.execute_short_trade(trade)
+                        logger.info(f"[MAIN] execute_short_trade response für {symbol}: {short_result}")
                         logger.info(f"[MAIN] Automatischer Verkauf ausgeführt für {symbol}.")
                     except Exception as e:
                         logger.error(f"Fehler beim automatischen Verkauf für {symbol}: {e}")

@@ -187,7 +187,6 @@ with st.expander("Strategie", expanded=False):
     st.markdown("**Parameter aus YAML:**")
     st.write({
         "risk_percent": strategy_cfg.get("risk_percent"),
-        "reward_ratio": strategy_cfg.get("reward_ratio"),
         "stop_loss_buffer": strategy_cfg.get("stop_loss_buffer"),
         **{k: v for k, v in params.items()}
     })
@@ -196,18 +195,23 @@ with st.expander("Strategie", expanded=False):
 # Panel für Bot Einstellungen
 with st.expander("Bot Einstellungen", expanded=False):
     st.subheader("Konfiguration")
-    if config:
+    if not config:
+        st.write("Keine Konfiguration gefunden.")
+    else:
+        mode = config.get('execution', {}).get('mode')
+        api_url = None
+        if mode == 'live':
+            api_url = 'https://api.binance.com/api/v3'
+        elif mode == 'testnet':
+            api_url = 'https://testnet.binance.vision/api/v3'
         st.write({
-            "Modus": config.get('execution', {}).get('mode'),
+            "Modus": mode,
+            "API URL": api_url,
             "Symbole": config.get('trading', {}).get('symbols'),
             "Timeframe": config.get('trading', {}).get('timeframe'),
             "Risk/Trade": f"{config.get('trading', {}).get('risk_percent', '')}%",
-            "Reward Ratio": config.get('trading', {}).get('reward_ratio'),
-            "Stop-Loss Buffer": config.get('trading', {}).get('stop_loss_buffer'),
             "Max Trades/Tag": config.get('execution', {}).get('max_trades_per_day'),
         })
-    else:
-        st.write("Keine Konfiguration gefunden.")
 
 if not df.empty:
     st.subheader("Performance")
