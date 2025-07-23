@@ -88,41 +88,59 @@ df = load_trades(log_path)
 config = load_config(config_path)
 
 # --- UI Code ---
-st.title("Trading Bot Dashboard")
+col_title, col_btn = st.columns([4,1])
+with col_title:
+    st.title("Trading Bot Dashboard")
+pid = get_pid()
+running = pid and is_process_running(pid)
+with col_btn:
+    if running:
+        if st.button("Stop Bot", key="stop_btn_top"):
+            success, msg = stop_bot()
+            st.write(msg)
+            st.info("Bitte Seite neu laden (F5), um den aktuellen Status zu sehen.")
+    else:
+        if st.button("Start Bot", key="start_btn_top"):
+            success, msg = start_bot()
+            st.write(msg)
+            st.info("Bitte Seite neu laden (F5), um den aktuellen Status zu sehen.")
+
+st.markdown(f"**Bot Status:** {'🟢 Läuft (PID: ' + str(pid) + ')' if running else '🔴 Gestoppt'}")
 
 # Portfolio Panel
-st.header("Portfolio Übersicht")
-try:
-    from data import DataFetcher
-    with open('config.yaml') as f:
-        config_portfolio = yaml.safe_load(f)
-    fetcher = DataFetcher(config_portfolio)
-    portfolio = fetcher.fetch_portfolio()
-    assets = portfolio.get('assets', [])
-    total_value = portfolio.get('total_value', 0.0)
-    error_msg = None
-    # Fehler aus Portfolio-Response extrahieren, falls vorhanden
-    if 'error' in portfolio:
-        error_msg = portfolio['error']
-    if isinstance(assets, list) and len(assets) > 0:
-        df_assets = pd.DataFrame(assets)
-        show_cols = [c for c in ['asset', 'amount', 'price', 'value'] if c in df_assets.columns]
-        if show_cols:
-            st.dataframe(df_assets[show_cols].fillna("-"), use_container_width=True)
+
+with st.expander("Portfolio Übersicht", expanded=True):
+    try:
+        from data import DataFetcher
+        with open('config.yaml') as f:
+            config_portfolio = yaml.safe_load(f)
+        fetcher = DataFetcher(config_portfolio)
+        portfolio = fetcher.fetch_portfolio()
+        assets = portfolio.get('assets', [])
+        total_value = portfolio.get('total_value', 0.0)
+        error_msg = None
+        # Fehler aus Portfolio-Response extrahieren, falls vorhanden
+        if 'error' in portfolio:
+            error_msg = portfolio['error']
+        if isinstance(assets, list) and len(assets) > 0:
+            df_assets = pd.DataFrame(assets)
+            show_cols = [c for c in ['asset', 'amount', 'price', 'value'] if c in df_assets.columns]
+            if show_cols:
+                st.dataframe(df_assets[show_cols].fillna("-"), use_container_width=True)
+            else:
+                st.dataframe(df_assets.fillna("-"), use_container_width=True)
+            st.metric("Portfolio Gesamtwert (USD)", f"{total_value:,.2f}")
         else:
-            st.dataframe(df_assets.fillna("-"), use_container_width=True)
-        st.metric("Portfolio Gesamtwert (USD)", f"{total_value:,.2f}")
-    else:
-        st.info("Keine Assets im Portfolio oder API-Fehler.")
-        if error_msg:
-            st.error(f"Portfolio-Fehler: {error_msg}")
-except Exception as e:
-    import traceback
-    st.error(f"Fehler beim Laden des Portfolios: {e}")
-    st.text(traceback.format_exc())  # ← Zeigt Stacktrace an!
+            st.info("Keine Assets im Portfolio oder API-Fehler.")
+            if error_msg:
+                st.error(f"Portfolio-Fehler: {error_msg}")
+    except Exception as e:
+        import traceback
+        st.error(f"Fehler beim Laden des Portfolios: {e}")
+        st.text(traceback.format_exc())  # ← Zeigt Stacktrace an!
 
 # Strategie
-with st.expander("Strategie", expanded=True):
+with st.expander("Strategie", expanded=False):
     st.subheader("High-Volatility Breakout + Momentum-Rider")
     strategy_file = "strategy_high_volatility_breakout_momentum.yaml"
     strategy_cfg = {}
@@ -165,22 +183,6 @@ with st.expander("Strategie", expanded=True):
         **{k: v for k, v in params.items()}
     })
 
-# Start/Stop Buttons ganz oben
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("Start Bot"):
-        success, msg = start_bot()
-        st.write(msg)
-        st.info("Bitte Seite neu laden (F5), um den aktuellen Status zu sehen.")
-with col2:
-    if st.button("Stop Bot"):
-        success, msg = stop_bot()
-        st.write(msg)
-        st.info("Bitte Seite neu laden (F5), um den aktuellen Status zu sehen.")
-
-pid = get_pid()
-running = pid and is_process_running(pid)
-st.markdown(f"**Bot Status:** {'🟢 Läuft (PID: ' + str(pid) + ')' if running else '🔴 Gestoppt'}")
 
 # Panel für Bot Einstellungen
 with st.expander("Bot Einstellungen", expanded=False):
