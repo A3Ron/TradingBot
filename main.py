@@ -153,24 +153,28 @@ while True:
                 if last_signal:
                     logger.info(f"[MAIN] Trade-Signal erkannt für {symbol}: {last_signal}")
                     try:
-                        result = trader.execute_trade(last_signal)
+                        if hasattr(last_signal, 'signal_type') and last_signal.signal_type == 'short':
+                            result = trader.execute_short_trade(last_signal)
+                        else:
+                            result = trader.execute_trade(last_signal)
                         logger.info(f"[MAIN] execute_trade response für {symbol}: {result}")
-                        trader.set_stop_loss_take_profit(last_signal.entry, last_signal.stop_loss, last_signal.take_profit)
-                        logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
-                        # Logge Trade mit Signal-Grund
-                        signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
-                        trade_logger.log_trade(
-                            symbol=symbol,
-                            entry=last_signal.entry,
-                            exit=None,
-                            stop_loss=last_signal.stop_loss,
-                            take_profit=last_signal.take_profit,
-                            volume=last_signal.volume,
-                            outcome='open',
-                            exit_type=None,
-                            signal_reason=signal_reason
-                        )
-                        open_trades[symbol] = last_signal
+                        if result:
+                            trader.set_stop_loss_take_profit(last_signal.entry, last_signal.stop_loss, last_signal.take_profit)
+                            logger.info(f"[MAIN] Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
+                            # Logge Trade mit Signal-Grund
+                            signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
+                            trade_logger.log_trade(
+                                symbol=symbol,
+                                entry=last_signal.entry,
+                                exit=None,
+                                stop_loss=last_signal.stop_loss,
+                                take_profit=last_signal.take_profit,
+                                volume=last_signal.volume,
+                                outcome='open',
+                                exit_type=None,
+                                signal_reason=signal_reason
+                            )
+                            open_trades[symbol] = last_signal
                     except Exception as e:
                         logger.error(f"Fehler beim Ausführen des Trades für {symbol}: {e}")
             else:

@@ -57,9 +57,10 @@ class Trader:
 
     def execute_trade(self, signal):
         volume = self.get_trade_volume(signal)
+        msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
-            self.logger.info(f"[TESTNET] Buy {self.symbol} at {signal.entry} Vol: {volume}")
-            self.send_telegram(f"[TESTNET] Buy {self.symbol} at {signal.entry} Vol: {volume}")
+            self.logger.info(f"[TESTNET] {msg}")
+            self.send_telegram(f"[TESTNET] {msg}")
             return True
         # Live mode
         try:
@@ -75,11 +76,11 @@ class Trader:
                     volume
                 )
             self.logger.info(f"Order executed: {order}")
-            self.send_telegram(f"Order executed: {order}")
+            self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             return order
         except Exception as e:
             self.logger.error(f"Trade failed: {e}")
-            self.send_telegram(f"Trade failed: {e}")
+            self.send_telegram(f"LONG Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
     def set_stop_loss_take_profit(self, entry, stop_loss, take_profit):
@@ -89,9 +90,10 @@ class Trader:
 
     def execute_short_trade(self, signal):
         volume = self.get_trade_volume(signal)
+        msg = f"SHORT {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
-            self.logger.info(f"[TESTNET] Sell {self.symbol} at {signal.entry} Vol: {volume}")
-            self.send_telegram(f"[TESTNET] Sell {self.symbol} at {signal.entry} Vol: {volume}")
+            self.logger.info(f"[TESTNET] {msg}")
+            self.send_telegram(f"[TESTNET] {msg}")
             return True
         try:
             if self.is_futures:
@@ -106,11 +108,11 @@ class Trader:
                     volume
                 )
             self.logger.info(f"Short order executed: {order}")
-            self.send_telegram(f"Short order executed: {order}")
+            self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             return order
         except Exception as e:
             self.logger.error(f"Short trade failed: {e}")
-            self.send_telegram(f"Short trade failed: {e}")
+            self.send_telegram(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
     def send_telegram(self, message):
