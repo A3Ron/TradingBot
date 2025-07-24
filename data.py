@@ -29,6 +29,9 @@ class DataFetcher:
         df = pd.read_csv(filename, parse_dates=['timestamp'])
         if df.empty:
             return
+        # Stelle sicher, dass timestamp als datetime64[ns] vorliegt
+        if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         # Trenne in zu archivierende und zu behaltende Daten
         cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=keep_days)
         to_archive = df[df['timestamp'] < cutoff]
@@ -77,12 +80,18 @@ class DataFetcher:
         # Nach dem Speichern archivieren und Rolling-Window anwenden
         self.archive_ohlcv(symbol, market_type=market_type, keep_days=2)
 
-    def load_ohlcv_from_file(self, symbol, market_type='spot'):
-        """Lädt OHLCV-Daten für ein Symbol/Typ."""
+    def load_ohlcv_from_file(self, symbol, market_type='spot', create_if_missing=True):
+        """Lädt OHLCV-Daten für ein Symbol/Typ. Erstellt leere Datei mit vollständigem Header, falls nicht vorhanden und create_if_missing=True."""
         filename = self.get_ohlcv_filename(symbol, market_type)
         if os.path.exists(filename):
             return pd.read_csv(filename, parse_dates=['timestamp'])
-        return pd.DataFrame()
+        elif create_if_missing:
+            columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason']
+            df = pd.DataFrame(columns=columns)
+            df.to_csv(filename, index=False, encoding='utf-8')
+            return df
+        else:
+            return pd.DataFrame()
 
     def fetch_and_save_ohlcv_for_symbols(self, symbols, market_type='spot', limit=500):
         """Lädt und speichert OHLCV-Daten für alle angegebenen Symbole/Typen."""

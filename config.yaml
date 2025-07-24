@@ -18,7 +18,6 @@ trading:
   - SOLUSDT
   - BNBUSDT
   - BTCUSDT
-  - 1000PEPEUSDT
   - SUIUSDT
   - XRPUSDT
   stake_percent: 0.02
@@ -28,7 +27,6 @@ trading:
   - SOL/USDT
   - BNB/USDT
   - BTC/USDT
-  - PEPE/USDT
   - SUI/USDT
   - XRP/USDT
   timeframe: 5m

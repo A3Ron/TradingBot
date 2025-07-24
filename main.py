@@ -76,7 +76,7 @@ config['telegram']['chat_id'] = os.getenv('TELEGRAM_CHAT_ID')
 
 
 # Symbollisten für Spot (Long) und Futures (Short) aus Config
-spot_symbols = config['trading'].get('spot_symbols', [])
+spot_symbols = config['trading'].get('symbols', [])
 futures_symbols = config['trading'].get('futures_symbols', [])
 
 # Strategie-Instanzen für beide Typen
@@ -93,10 +93,14 @@ futures_traders = {symbol: FuturesShortTrader(config, symbol) for symbol in futu
 spot_datafetcher = DataFetcher(config)
 futures_datafetcher = DataFetcher(config)
 
-# Sende Startnachricht mit wichtigsten Infos (an alle Trader)
+# Sende Startnachricht mit wichtigsten Infos (nur einmal)
 startup_msg = format_startup_message(config)
-for t in list(spot_traders.values()) + list(futures_traders.values()):
-    t.send_telegram(startup_msg)
+if spot_traders:
+    # Sende über den ersten Spot-Trader, falls vorhanden
+    list(spot_traders.values())[0].send_telegram(startup_msg)
+elif futures_traders:
+    # Sonst über den ersten Futures-Trader
+    list(futures_traders.values())[0].send_telegram(startup_msg)
 
 # --- Hauptloop ---
 open_trades_spot = {symbol: None for symbol in spot_symbols}
@@ -108,23 +112,28 @@ def handle_spot_trades():
     global last_candle_time_spot, open_trade_spot
     candidate_spot = []
     for symbol in spot_symbols:
-        df = spot_datafetcher.load_ohlcv_from_file(symbol, 'spot')
-        if df.empty:
-            continue
-        df = spot_strategy.get_signals_and_reasons(df)
-        candle_time = df['timestamp'].iloc[-1]
-        if last_candle_time_spot is None or candle_time > last_candle_time_spot:
-            last_candle_time_spot = candle_time
-            last_signal = spot_strategy.check_signal(df)
-            if last_signal:
-                vol_mean = df['volume'].iloc[-20:-1].mean() if len(df) > 20 else df['volume'].mean()
-                vol_score = last_signal.volume / vol_mean if vol_mean else 0
-                candidate_spot.append({
-                    'symbol': symbol,
-                    'signal': last_signal,
-                    'vol_score': vol_score,
-                    'df': df
-                })
+        try:
+            df = spot_datafetcher.load_ohlcv_from_file(symbol, 'spot')
+            if df.empty:
+                logger.warning(f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
+                continue
+            logger.info(f"[SPOT] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
+            df = spot_strategy.get_signals_and_reasons(df)
+            candle_time = df['timestamp'].iloc[-1]
+            if last_candle_time_spot is None or candle_time > last_candle_time_spot:
+                last_candle_time_spot = candle_time
+                last_signal = spot_strategy.check_signal(df)
+                if last_signal:
+                    vol_mean = df['volume'].iloc[-20:-1].mean() if len(df) > 20 else df['volume'].mean()
+                    vol_score = last_signal.volume / vol_mean if vol_mean else 0
+                    candidate_spot.append({
+                        'symbol': symbol,
+                        'signal': last_signal,
+                        'vol_score': vol_score,
+                        'df': df
+                    })
+        except Exception as e:
+            logger.error(f"[SPOT] Fehler beim Laden der OHLCV-Daten für {symbol}: {e}")
     if open_trade_spot is not None:
         symbol = open_trade_spot['symbol']
         trader = spot_traders[symbol]
@@ -177,23 +186,28 @@ def handle_futures_trades():
     global last_candle_time_futures, open_trade_futures
     candidate_futures = []
     for symbol in futures_symbols:
-        df = futures_datafetcher.load_ohlcv_from_file(symbol, 'futures')
-        if df.empty:
-            continue
-        df = futures_strategy.get_signals_and_reasons(df)
-        candle_time = df['timestamp'].iloc[-1]
-        if last_candle_time_futures is None or candle_time > last_candle_time_futures:
-            last_candle_time_futures = candle_time
-            last_signal = futures_strategy.check_signal(df)
-            if last_signal:
-                vol_mean = df['volume'].iloc[-20:-1].mean() if len(df) > 20 else df['volume'].mean()
-                vol_score = last_signal.volume / vol_mean if vol_mean else 0
-                candidate_futures.append({
-                    'symbol': symbol,
-                    'signal': last_signal,
-                    'vol_score': vol_score,
-                    'df': df
-                })
+        try:
+            df = futures_datafetcher.load_ohlcv_from_file(symbol, 'futures')
+            if df.empty:
+                logger.warning(f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
+                continue
+            logger.info(f"[FUTURES] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
+            df = futures_strategy.get_signals_and_reasons(df)
+            candle_time = df['timestamp'].iloc[-1]
+            if last_candle_time_futures is None or candle_time > last_candle_time_futures:
+                last_candle_time_futures = candle_time
+                last_signal = futures_strategy.check_signal(df)
+                if last_signal:
+                    vol_mean = df['volume'].iloc[-20:-1].mean() if len(df) > 20 else df['volume'].mean()
+                    vol_score = last_signal.volume / vol_mean if vol_mean else 0
+                    candidate_futures.append({
+                        'symbol': symbol,
+                        'signal': last_signal,
+                        'vol_score': vol_score,
+                        'df': df
+                    })
+        except Exception as e:
+            logger.error(f"[FUTURES] Fehler beim Laden der OHLCV-Daten für {symbol}: {e}")
     if open_trade_futures is not None:
         symbol = open_trade_futures['symbol']
         trader = futures_traders[symbol]
@@ -242,8 +256,18 @@ def handle_futures_trades():
             except Exception as e:
                 logger.error(f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}")
 
+# --- Globale Variablen für offene Trades und letzte Candle ---
+open_trade_spot = None
+open_trade_futures = None
+last_candle_time_spot = None
+last_candle_time_futures = None
+
 while True:
     try:
+        # OHLCV-Daten für alle Symbole vor jedem Loop aktualisieren
+        spot_datafetcher.fetch_and_save_ohlcv_for_symbols(spot_symbols, market_type='spot', limit=50)
+        futures_datafetcher.fetch_and_save_ohlcv_for_symbols(futures_symbols, market_type='futures', limit=50)
+
         handle_spot_trades()
         handle_futures_trades()
         time.sleep(30)

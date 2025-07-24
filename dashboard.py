@@ -14,11 +14,25 @@ load_dotenv()
 # Alle 59 Sekunden neu laden
 st_autorefresh(interval=59 * 1000, key="refresh")
 
+# Hilfsfunktion für Zeitzonen-Konvertierung
+def convert_to_swiss_time(ts):
+    """Konvertiert UTC-Timestamp oder pd.Timestamp nach Europe/Zurich."""
+    if pd.isnull(ts):
+        return ts
+    if not isinstance(ts, pd.Timestamp):
+        ts = pd.to_datetime(ts, utc=True)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize('UTC')
+    return ts.tz_convert('Europe/Zurich')
+
 # --- Function Definitions ---
 def load_trades(log_path):
     if os.path.exists(log_path):
         if os.path.getsize(log_path) > 0:
-            return pd.read_csv(log_path)
+            df = pd.read_csv(log_path)
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce').dt.tz_localize('UTC').dt.tz_convert('Europe/Zurich')
+            return df
         else:
             # Leere Datei, gebe leeres DataFrame mit Spaltennamen zurück
             return pd.DataFrame(columns=[
@@ -397,7 +411,7 @@ with st.expander("Trade-Statistiken & Auswertung", expanded=False):
             trade_df["entry_price"] = pd.to_numeric(trade_df["entry_price"], errors="coerce")
             trade_df["exit_price"] = pd.to_numeric(trade_df["exit_price"], errors="coerce")
             trade_df["volume"] = pd.to_numeric(trade_df["volume"], errors="coerce")
-            trade_df["timestamp"] = pd.to_datetime(trade_df["timestamp"], errors="coerce")
+            trade_df["timestamp"] = pd.to_datetime(trade_df["timestamp"], errors="coerce").dt.tz_localize('UTC').dt.tz_convert('Europe/Zurich')
             # Gewinn/Verlust pro Trade (USD)
             trade_df["pnl"] = (trade_df["exit_price"] - trade_df["entry_price"]) * trade_df["volume"]
             # Trefferquote
@@ -433,8 +447,14 @@ with st.expander("Binance OHLCV Daten", expanded=False):
     st.subheader("Letzte OHLCV-Daten pro Symbol und Markt-Typ")
     # Auswahl Spot/Futures
     market_type = st.radio("Markt-Typ wählen", ["spot", "futures"], horizontal=True, key="market_type")
-    # Verfügbare Symbole je nach Markt-Typ
-    symbols = st.session_state.get(f"{market_type}_symbols", [])
+    # Nur Symbole aus der config.yaml anzeigen
+    config_spot = set(config.get('trading', {}).get('symbols', []))
+    config_futures = set(config.get('trading', {}).get('futures_symbols', []))
+    all_symbols = st.session_state.get(f"{market_type}_symbols", [])
+    if market_type == 'spot':
+        symbols = [s for s in all_symbols if s in config_spot]
+    else:
+        symbols = [s for s in all_symbols if s in config_futures]
     if not symbols:
         st.warning(f"Keine {market_type.capitalize()}-Symbole gefunden!")
     else:
@@ -462,13 +482,22 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         if os.path.exists(ohlcv_path) and os.path.getsize(ohlcv_path) > 0:
             ohlcv_df = pd.read_csv(ohlcv_path)
             if 'timestamp' in ohlcv_df.columns:
-                ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'])
+                ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'], errors='coerce').dt.tz_localize('UTC').dt.tz_convert('Europe/Zurich')
             now = ohlcv_df['timestamp'].max()
             time_filter = now - time_ranges[selected_range]
             df_symbol = ohlcv_df[ohlcv_df['timestamp'] >= time_filter].copy()
             if df_symbol.empty:
                 st.info("Keine Daten für diesen Zeitraum/Symbol.")
             else:
+                # Performance-Berechnung für den Zeitraum
+                first_open = df_symbol['open'].iloc[0] if 'open' in df_symbol.columns and not df_symbol.empty else None
+                last_close = df_symbol['close'].iloc[-1] if 'close' in df_symbol.columns and not df_symbol.empty else None
+                perf_pct = None
+                if first_open and last_close and first_open != 0:
+                    perf_pct = ((last_close - first_open) / first_open) * 100
+                # Zeige Performance-Metrik
+                if perf_pct is not None:
+                    st.metric(f"Performance ({selected_range})", f"{perf_pct:+.2f}%", delta=f"{last_close:.4f} / {first_open:.4f}")
                 # Candlestick-Chart wie Binance
                 cdata = df_symbol.copy()
                 cdata['color'] = (cdata['close'] >= cdata['open']).map({True: '#26a69a', False: '#ef5350'})  # grün/rot
