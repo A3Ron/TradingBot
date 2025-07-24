@@ -11,8 +11,8 @@ from streamlit_autorefresh import st_autorefresh
 from dotenv import load_dotenv
 load_dotenv()
 
-# Alle 30 Sekunden neu laden
-st_autorefresh(interval=30 * 1000, key="refresh")
+# Alle 59 Sekunden neu laden
+st_autorefresh(interval=59 * 1000, key="refresh")
 
 # --- Function Definitions ---
 def load_trades(log_path):

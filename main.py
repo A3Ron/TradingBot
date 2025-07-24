@@ -3,7 +3,6 @@ import os
 import yaml
 import time
 import logging
-import pandas as pd
 from dotenv import load_dotenv
 from data import DataFetcher
 from trader import SpotLongTrader, FuturesShortTrader
@@ -105,108 +104,149 @@ open_trades_spot = {symbol: None for symbol in spot_symbols}
 open_trades_futures = {symbol: None for symbol in futures_symbols}
 trade_logger = Logger(TRADELOG_PATH)
 
+last_candle_time_spot = None
+last_candle_time_futures = None
+open_trade_spot = None  # Nur ein aktiver Spot-Long-Trade
+open_trade_futures = None  # Nur ein aktiver Futures-Short-Trade
+
 while True:
     try:
-        # Spot/Long Loop
+        # --- Spot-Long: bestes Signal pro 5m-Candle ---
+        candidate_spot = []
         for symbol in spot_symbols:
             df = spot_datafetcher.load_ohlcv_from_file(symbol, 'spot')
             if df.empty:
                 continue
             df = spot_strategy.get_signals_and_reasons(df)
-            trader = spot_traders[symbol]
-            trade = open_trades_spot.get(symbol)
-            if trade is None:
+            candle_time = df['timestamp'].iloc[-1]
+            if last_candle_time_spot is None or candle_time > last_candle_time_spot:
+                last_candle_time_spot = candle_time
                 last_signal = spot_strategy.check_signal(df)
                 if last_signal:
-                    logger.info(f"[MAIN] Spot-Trade-Signal erkannt für {symbol}: {last_signal}")
-                    try:
-                        result = trader.execute_trade(last_signal)
-                        logger.info(f"[MAIN] execute_trade response für {symbol}: {result}")
-                        if result:
-                            trader.send_telegram(f"Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
-                            signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
-                            trade_logger.log_trade(
-                                symbol=symbol,
-                                entry=last_signal.entry,
-                                exit=None,
-                                stop_loss=last_signal.stop_loss,
-                                take_profit=last_signal.take_profit,
-                                volume=last_signal.volume,
-                                outcome='open',
-                                exit_type=None,
-                                signal_reason=signal_reason
-                            )
-                            open_trades_spot[symbol] = last_signal
-                    except Exception as e:
-                        logger.error(f"Fehler beim Ausführen des Spot-Trades für {symbol}: {e}")
-            else:
-                exit_type = trader.monitor_trade(trade, df, spot_strategy)
-                if exit_type:
-                    logger.info(f"[MAIN] Spot-Trade für {symbol} geschlossen: {exit_type}")
-                    trader.send_telegram(f"Spot-Trade für {symbol} geschlossen: {exit_type}")
-                    trade_logger.log_trade(
-                        symbol=symbol,
-                        entry=trade.entry,
-                        exit=df['close'].iloc[-1] if 'close' in df.columns else None,
-                        stop_loss=trade.stop_loss,
-                        take_profit=trade.take_profit,
-                        volume=trade.volume,
-                        outcome='closed',
-                        exit_type=exit_type,
-                        signal_reason=None
-                    )
-                    open_trades_spot[symbol] = None
-
-        # Futures/Short Loop
+                    vol_mean = df['volume'].iloc[-20:-1].mean() if len(df) > 20 else df['volume'].mean()
+                    vol_score = last_signal.volume / vol_mean if vol_mean else 0
+                    candidate_spot.append({
+                        'symbol': symbol,
+                        'signal': last_signal,
+                        'vol_score': vol_score,
+                        'df': df
+                    })
+        # --- Futures-Short: bestes Signal pro 5m-Candle ---
+        candidate_futures = []
         for symbol in futures_symbols:
             df = futures_datafetcher.load_ohlcv_from_file(symbol, 'futures')
             if df.empty:
                 continue
             df = futures_strategy.get_signals_and_reasons(df)
-            trader = futures_traders[symbol]
-            trade = open_trades_futures.get(symbol)
-            if trade is None:
+            candle_time = df['timestamp'].iloc[-1]
+            if last_candle_time_futures is None or candle_time > last_candle_time_futures:
+                last_candle_time_futures = candle_time
                 last_signal = futures_strategy.check_signal(df)
                 if last_signal:
-                    logger.info(f"[MAIN] Futures-Short-Signal erkannt für {symbol}: {last_signal}")
-                    try:
-                        result = trader.execute_trade(last_signal)
-                        logger.info(f"[MAIN] execute_trade response für {symbol}: {result}")
-                        if result:
-                            trader.send_telegram(f"Short-Trade ausgeführt für {symbol} Entry: {last_signal.entry} SL: {last_signal.stop_loss} TP: {last_signal.take_profit} Vol: {last_signal.volume}")
-                            signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
-                            trade_logger.log_trade(
-                                symbol=symbol,
-                                entry=last_signal.entry,
-                                exit=None,
-                                stop_loss=last_signal.stop_loss,
-                                take_profit=last_signal.take_profit,
-                                volume=last_signal.volume,
-                                outcome='open',
-                                exit_type=None,
-                                signal_reason=signal_reason
-                            )
-                            open_trades_futures[symbol] = last_signal
-                    except Exception as e:
-                        logger.error(f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}")
-            else:
-                exit_type = trader.monitor_trade(trade, df, futures_strategy)
-                if exit_type:
-                    logger.info(f"[MAIN] Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
-                    trader.send_telegram(f"Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
-                    trade_logger.log_trade(
-                        symbol=symbol,
-                        entry=trade.entry,
-                        exit=df['close'].iloc[-1] if 'close' in df.columns else None,
-                        stop_loss=trade.stop_loss,
-                        take_profit=trade.take_profit,
-                        volume=trade.volume,
-                        outcome='closed',
-                        exit_type=exit_type,
-                        signal_reason=None
-                    )
-                    open_trades_futures[symbol] = None
-
+                    vol_mean = df['volume'].iloc[-20:-1].mean() if len(df) > 20 else df['volume'].mean()
+                    vol_score = last_signal.volume / vol_mean if vol_mean else 0
+                    candidate_futures.append({
+                        'symbol': symbol,
+                        'signal': last_signal,
+                        'vol_score': vol_score,
+                        'df': df
+                    })
+        # --- Spot-Long Trade-Handling ---
+        if open_trade_spot is not None:
+            symbol = open_trade_spot['symbol']
+            trader = spot_traders[symbol]
+            df = open_trade_spot['df']
+            exit_type = trader.monitor_trade(open_trade_spot['signal'], df, spot_strategy)
+            if exit_type:
+                logger.info(f"[MAIN] Spot-Trade für {symbol} geschlossen: {exit_type}")
+                trader.send_telegram(f"Spot-Trade für {symbol} geschlossen: {exit_type}")
+                trade_logger.log_trade(
+                    symbol=symbol,
+                    entry=open_trade_spot['signal'].entry,
+                    exit=df['close'].iloc[-1] if 'close' in df.columns else None,
+                    stop_loss=open_trade_spot['signal'].stop_loss,
+                    take_profit=open_trade_spot['signal'].take_profit,
+                    volume=open_trade_spot['signal'].volume,
+                    outcome='closed',
+                    exit_type=exit_type,
+                    signal_reason=None
+                )
+                open_trade_spot = None
+        else:
+            if candidate_spot:
+                best = max(candidate_spot, key=lambda x: x['vol_score'])
+                symbol = best['symbol']
+                trader = spot_traders[symbol]
+                signal = best['signal']
+                df = best['df']
+                try:
+                    result = trader.execute_trade(signal)
+                    logger.info(f"[MAIN] Spot-Trade ausgeführt für {symbol}: {result}")
+                    if result:
+                        trader.send_telegram(f"Spot-Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
+                        signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
+                        trade_logger.log_trade(
+                            symbol=symbol,
+                            entry=signal.entry,
+                            exit=None,
+                            stop_loss=signal.stop_loss,
+                            take_profit=signal.take_profit,
+                            volume=signal.volume,
+                            outcome='open',
+                            exit_type=None,
+                            signal_reason=signal_reason
+                        )
+                        open_trade_spot = best
+                except Exception as e:
+                    logger.error(f"Fehler beim Ausführen des Spot-Trades für {symbol}: {e}")
+        # --- Futures-Short Trade-Handling ---
+        if open_trade_futures is not None:
+            symbol = open_trade_futures['symbol']
+            trader = futures_traders[symbol]
+            df = open_trade_futures['df']
+            exit_type = trader.monitor_trade(open_trade_futures['signal'], df, futures_strategy)
+            if exit_type:
+                logger.info(f"[MAIN] Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
+                trader.send_telegram(f"Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
+                trade_logger.log_trade(
+                    symbol=symbol,
+                    entry=open_trade_futures['signal'].entry,
+                    exit=df['close'].iloc[-1] if 'close' in df.columns else None,
+                    stop_loss=open_trade_futures['signal'].stop_loss,
+                    take_profit=open_trade_futures['signal'].take_profit,
+                    volume=open_trade_futures['signal'].volume,
+                    outcome='closed',
+                    exit_type=exit_type,
+                    signal_reason=None
+                )
+                open_trade_futures = None
+        else:
+            if candidate_futures:
+                best = max(candidate_futures, key=lambda x: x['vol_score'])
+                symbol = best['symbol']
+                trader = futures_traders[symbol]
+                signal = best['signal']
+                df = best['df']
+                try:
+                    result = trader.execute_trade(signal)
+                    logger.info(f"[MAIN] Futures-Short-Trade ausgeführt für {symbol}: {result}")
+                    if result:
+                        trader.send_telegram(f"Futures-Short-Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
+                        signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
+                        trade_logger.log_trade(
+                            symbol=symbol,
+                            entry=signal.entry,
+                            exit=None,
+                            stop_loss=signal.stop_loss,
+                            take_profit=signal.take_profit,
+                            volume=signal.volume,
+                            outcome='open',
+                            exit_type=None,
+                            signal_reason=signal_reason
+                        )
+                        open_trade_futures = best
+                except Exception as e:
+                    logger.error(f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}")
         time.sleep(30)
     except Exception as e:
         logger.error(f"Error: {e}")
