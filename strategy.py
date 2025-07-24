@@ -88,10 +88,11 @@ class SpotLongStrategy(BaseStrategy):
         reasons = []
         prev_rsi = df['rsi'].shift(1)
         for i, row in df.iterrows():
-            price_chg = row['price_change'] * 100 if pd.notnull(row['price_change']) else None
-            vol_mult = row['volume'] / row['vol_mean'] if pd.notnull(row['vol_mean']) and row['vol_mean'] != 0 else None
-            rsi_val = row['rsi'] if pd.notnull(row['rsi']) else None
-            rsi_delta = row['rsi'] - prev_rsi[i] if pd.notnull(row['rsi']) and pd.notnull(prev_rsi[i]) else None
+            # Use nan for missing values to allow numeric formatting
+            price_chg = row['price_change'] * 100 if pd.notnull(row['price_change']) else float('nan')
+            vol_mult = (row['volume'] / row['vol_mean']) if pd.notnull(row['vol_mean']) and row['vol_mean'] != 0 else float('nan')
+            rsi_val = row['rsi'] if pd.notnull(row['rsi']) else float('nan')
+            rsi_delta = (row['rsi'] - prev_rsi[i]) if pd.notnull(row['rsi']) and pd.notnull(prev_rsi[i]) else float('nan')
             if signal_mask_long.loc[i]:
                 reasons.append('Long Signal: Preis > +{:.2f}% (Schwelle: {:.2f}%), Vol > {:.2f}x (Schwelle: {:.2f}x), RSI > {:.2f} (Schwelle: {})'.format(
                     price_chg, self.price_change_pct*100, vol_mult, self.volume_mult, rsi_val, self.rsi_long))
@@ -151,10 +152,11 @@ class FuturesShortStrategy(BaseStrategy):
         reasons = []
         prev_rsi = df['rsi'].shift(1)
         for i, row in df.iterrows():
-            price_chg = row['price_change'] * 100 if pd.notnull(row['price_change']) else None
-            vol_mult = row['volume'] / row['vol_mean'] if pd.notnull(row['vol_mean']) and row['vol_mean'] != 0 else None
-            rsi_val = row['rsi'] if pd.notnull(row['rsi']) else None
-            rsi_delta = row['rsi'] - prev_rsi[i] if pd.notnull(row['rsi']) and pd.notnull(prev_rsi[i]) else None
+            # Use nan for missing values to allow numeric formatting
+            price_chg = row['price_change'] * 100 if pd.notnull(row['price_change']) else float('nan')
+            vol_mult = (row['volume'] / row['vol_mean']) if pd.notnull(row['vol_mean']) and row['vol_mean'] != 0 else float('nan')
+            rsi_val = row['rsi'] if pd.notnull(row['rsi']) else float('nan')
+            rsi_delta = (row['rsi'] - prev_rsi[i]) if pd.notnull(row['rsi']) and pd.notnull(prev_rsi[i]) else float('nan')
             if signal_mask_short.loc[i]:
                 reasons.append('Short Signal: Preis < -{:.2f}% (Schwelle: -{:.2f}%), Vol > {:.2f}x (Schwelle: {:.2f}x), RSI < {:.2f} (Schwelle: {})'.format(
                     price_chg, self.price_change_pct*100, vol_mult, self.volume_mult, rsi_val, self.rsi_short))

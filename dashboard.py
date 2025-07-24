@@ -481,6 +481,14 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         # Datei laden
         if os.path.exists(ohlcv_path) and os.path.getsize(ohlcv_path) > 0:
             ohlcv_df = pd.read_csv(ohlcv_path)
+            # Signale und Gründe nachladen für Anzeige
+            try:
+                from strategy import get_strategy
+                strategies = get_strategy(config)
+                strat = strategies['spot_long'] if market_type == 'spot' else strategies['futures_short']
+                ohlcv_df = strat.get_signals_and_reasons(ohlcv_df)
+            except Exception:
+                pass
             if 'timestamp' in ohlcv_df.columns:
                 ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'], errors='coerce').dt.tz_localize('UTC').dt.tz_convert('Europe/Zurich')
             now = ohlcv_df['timestamp'].max()
