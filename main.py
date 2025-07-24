@@ -117,7 +117,6 @@ def handle_spot_trades():
             if df.empty:
                 logger.warning(f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue
-            logger.info(f"[SPOT] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
             df = spot_strategy.get_signals_and_reasons(df)
             candle_time = df['timestamp'].iloc[-1]
             if last_candle_time_spot is None or candle_time > last_candle_time_spot:
@@ -191,7 +190,6 @@ def handle_futures_trades():
             if df.empty:
                 logger.warning(f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue
-            logger.info(f"[FUTURES] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
             df = futures_strategy.get_signals_and_reasons(df)
             candle_time = df['timestamp'].iloc[-1]
             if last_candle_time_futures is None or candle_time > last_candle_time_futures:

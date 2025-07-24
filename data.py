@@ -118,7 +118,6 @@ class DataFetcher:
                 df = self.fetch_ohlcv(limit=limit)
                 if not df.empty:
                     self.save_ohlcv_to_file(df, symbol, market_type)
-                    logger.info(f'[INFO] OHLCV für {symbol} ({market_type}) gespeichert.')
                 else:
                     logger.warning(f'[WARN] Keine OHLCV-Daten für {symbol} ({market_type}) geladen.')
             except Exception as e:
