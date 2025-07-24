@@ -1,5 +1,6 @@
 import ccxt
 import logging
+import os  # for API key retrieval
 
 class BaseTrader:
     def __init__(self, config, symbol):
@@ -42,14 +43,18 @@ class BaseTrader:
 class SpotLongTrader(BaseTrader):
     def __init__(self, config, symbol):
         super().__init__(config, symbol)
+        # Load API credentials from environment, fallback to config
+        api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
+        api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')
         self.exchange = ccxt.binance({
-            'apiKey': config['binance']['api_key'],
-            'secret': config['binance']['api_secret'],
+            'apiKey': api_key,
+            'secret': api_secret,
             'enableRateLimit': True,
             'options': {'defaultType': 'spot'}
         })
 
     def execute_trade(self, signal):
+        # Determine base volume by risk percentage logic
         volume = self.get_trade_volume(signal)
         msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
@@ -57,9 +62,15 @@ class SpotLongTrader(BaseTrader):
             self.send_telegram(f"[TESTNET] {msg}")
             return True
         try:
-            order = self.exchange.create_market_buy_order(
-                self.symbol,
-                volume
+            # Use quoteOrderQty to satisfy minimum notional constraints
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            price = ticker.get('last') or ticker.get('close')
+            if price:
+                quote_qty = volume * price
+            else:
+                quote_qty = volume
+            order = self.exchange.create_order(
+                self.symbol, 'MARKET', 'BUY', None, None, {'quoteOrderQty': quote_qty}
             )
             self.logger.info(f"Order executed: {order}")
             self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
@@ -95,15 +106,26 @@ class SpotLongTrader(BaseTrader):
 class FuturesShortTrader(BaseTrader):
     def __init__(self, config, symbol):
         super().__init__(config, symbol)
+        # Load API credentials from environment, fallback to config
+        api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
+        api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')
         self.exchange = ccxt.binance({
-            'apiKey': config['binance']['api_key'],
-            'secret': config['binance']['api_secret'],
+            'apiKey': api_key,
+            'secret': api_secret,
             'enableRateLimit': True,
             'options': {'defaultType': 'future', 'contractType': 'PERPETUAL'}
         })
 
     def execute_trade(self, signal):
-        volume = self.get_trade_volume(signal)
+        # Use fixed notional amount (25 USDT) for futures trades
+        fixed_notional = self.config.get('trading', {}).get('fixed_futures_notional', 25)
+        ticker = self.exchange.fetch_ticker(self.symbol)
+        price = ticker.get('last') or ticker.get('close')
+        if price:
+            volume = fixed_notional / price
+        else:
+            volume = signal.volume
+        # Update signal volume to executed amount later
         msg = f"SHORT {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
             self.logger.info(f"[TESTNET] {msg}")
@@ -117,6 +139,8 @@ class FuturesShortTrader(BaseTrader):
             )
             self.logger.info(f"Short order executed: {order}")
             self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
+            # Update signal volume to actual executed amount
+            signal.volume = order.get('amount', volume)
             return order
         except Exception as e:
             self.logger.error(f"Short trade failed: {e}")
@@ -132,10 +156,20 @@ class FuturesShortTrader(BaseTrader):
         if current_price >= trade.stop_loss:
             self.logger.info(f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}")
             self.send_telegram(f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}")
+            # Close short position
+            try:
+                self.exchange.create_market_buy_order(self.symbol, trade.volume, params={"reduceOnly": True})
+            except Exception as e:
+                self.logger.error(f"Error closing short position: {e}")
             return "stop_loss"
         if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
             self.logger.info(f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}")
             self.send_telegram(f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            # Close short on momentum exit
+            try:
+                self.exchange.create_market_buy_order(self.symbol, trade.volume, params={"reduceOnly": True})
+            except Exception as e:
+                self.logger.error(f"Error closing short on momentum exit: {e}")
             return "momentum_exit"
         if hasattr(strategy, 'get_trailing_stop'):
             trailing_stop = strategy.get_trailing_stop(trade.entry, current_price)
