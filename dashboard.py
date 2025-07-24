@@ -422,36 +422,40 @@ with st.expander("Binance OHLCV Daten", expanded=False):
                 ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'])
             now = ohlcv_df['timestamp'].max()
             time_filter = now - time_ranges[selected_range]
-            chart_cols = ["open", "high", "low", "close"]
-            color_map = {
-                "open": "#1f77b4",
-                "high": "#2ca02c",
-                "low": "#d62728",
-                "close": "#ff7f0e"
-            }
             df_symbol = ohlcv_df[ohlcv_df['timestamp'] >= time_filter].copy()
             if df_symbol.empty:
                 st.info("Keine Daten für diesen Zeitraum/Symbol.")
             else:
-                chart_data = df_symbol.set_index('timestamp')[chart_cols].reset_index()
-                price_min = chart_data[chart_cols].min().min()
-                price_max = chart_data[chart_cols].max().max()
-                chart = alt.Chart(chart_data.melt('timestamp', value_vars=chart_cols)).mark_line().encode(
-                    x=alt.X('timestamp:T', title='Zeit'),
-                    y=alt.Y('value:Q', title='Preis', scale=alt.Scale(domain=[price_min, price_max])),
-                    color=alt.Color('variable:N', scale=alt.Scale(domain=chart_cols, range=[color_map[c] for c in chart_cols]), legend=alt.Legend(title="Preis-Typ"))
-                ).properties(title=f"{selected_symbol} Open/High/Low/Close ({market_type})")
-                chart = chart.interactive()
-                # Marker für Trade-Signale aus Spalte 'signal'
-                if 'signal' in df_symbol.columns:
-                    signal_points = alt.Chart(df_symbol[df_symbol['signal'] == True]).mark_point(color='red', size=80).encode(
+                # Candlestick-Chart wie Binance
+                cdata = df_symbol.copy()
+                cdata['color'] = (cdata['close'] >= cdata['open']).map({True: '#26a69a', False: '#ef5350'})  # grün/rot
+                base = alt.Chart(cdata).encode(
+                    x=alt.X('timestamp:T', title='Zeit')
+                )
+                # Kerzenkörper
+                bar = base.mark_bar().encode(
+                    y=alt.Y('open:Q', title='Preis', scale=alt.Scale(zero=False)),
+                    y2='close:Q',
+                    color=alt.Color('color:N', scale=None, legend=None)
+                )
+                # Dochte
+                rule = base.mark_rule().encode(
+                    y='low:Q',
+                    y2='high:Q',
+                    color=alt.Color('color:N', scale=None, legend=None)
+                )
+                chart = (rule + bar).properties(title=f"{selected_symbol} Candlestick Chart ({market_type})")
+                # Signal-Punkte (rot, mit Tooltip)
+                if 'signal' in cdata.columns:
+                    signal_points = alt.Chart(cdata[cdata['signal'] == True]).mark_point(color='red', size=80).encode(
                         x=alt.X('timestamp:T'),
                         y=alt.Y('close:Q'),
-                        tooltip=['timestamp', 'close', 'signal_reason'] if 'signal_reason' in df_symbol.columns else ['timestamp', 'close']
+                        tooltip=['timestamp', 'close', 'signal_reason'] if 'signal_reason' in cdata.columns else ['timestamp', 'close']
                     )
-                    st.altair_chart(chart + signal_points, use_container_width=True)
+                    chart = (rule + bar + signal_points).interactive()
                 else:
-                    st.altair_chart(chart, use_container_width=True)
+                    chart = chart.interactive()
+                st.altair_chart(chart, use_container_width=True)
                 # Volumen als separater interaktiver Chart
                 if 'volume' in df_symbol.columns:
                     vol_min = df_symbol['volume'].min()
