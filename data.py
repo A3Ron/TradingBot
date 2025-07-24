@@ -3,6 +3,7 @@ import ccxt
 import pandas as pd
 import logging
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -20,6 +21,37 @@ def get_bot_logger():
 logger = get_bot_logger()
 
 class DataFetcher:
+    def archive_ohlcv(self, symbol, market_type='spot', keep_days=2):
+        """Archiviert ältere OHLCV-Daten monatlich und hält nur die letzten keep_days im Arbeitsfile."""
+        filename = self.get_ohlcv_filename(symbol, market_type)
+        if not os.path.exists(filename):
+            return
+        df = pd.read_csv(filename, parse_dates=['timestamp'])
+        if df.empty:
+            return
+        # Trenne in zu archivierende und zu behaltende Daten
+        cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=keep_days)
+        to_archive = df[df['timestamp'] < cutoff]
+        to_keep = df[df['timestamp'] >= cutoff]
+        if not to_archive.empty:
+            # Archivverzeichnis anlegen
+            archive_dir = f"logs/archive"
+            Path(archive_dir).mkdir(parents=True, exist_ok=True)
+            # Archivdateiname: z.B. logs/archive/ohlcv_ETHUSDT_2025-07.csv
+            for month, group in to_archive.groupby(to_archive['timestamp'].dt.to_period('M')):
+                month_str = month.strftime('%Y-%m')
+                base = symbol.replace('/', '')
+                archive_file = f"{archive_dir}/ohlcv_{base}_{month_str}{'_futures' if market_type=='futures' else ''}.csv"
+                # Schreibe oder hänge an Archivfile
+                if os.path.exists(archive_file):
+                    group.to_csv(archive_file, mode='a', header=False, index=False, encoding='utf-8')
+                else:
+                    group.to_csv(archive_file, mode='w', header=True, index=False, encoding='utf-8')
+            # Arbeitsfile überschreiben mit den zu behaltenden Daten
+            to_keep.to_csv(filename, index=False, encoding='utf-8')
+            logger.info(f"[INFO] OHLCV für {symbol} ({market_type}) archiviert bis {cutoff.date()} und Rolling-Window aktualisiert.")
+        else:
+            logger.debug(f"[DEBUG] Keine OHLCV-Daten für {symbol} ({market_type}) zu archivieren.")
 
     def fetch_full_portfolio(self):
         """Holt Spot- und Futures-Portfolio getrennt und gibt beide plus das Total zurück."""
@@ -39,9 +71,11 @@ class DataFetcher:
         return f'logs/ohlcv_{base}_futures.csv' if market_type == 'futures' else f'logs/ohlcv_{base}.csv'
 
     def save_ohlcv_to_file(self, df, symbol, market_type='spot'):
-        """Speichert OHLCV-Daten für ein Symbol/Typ."""
+        """Speichert OHLCV-Daten für ein Symbol/Typ und archiviert ältere Daten automatisch."""
         filename = self.get_ohlcv_filename(symbol, market_type)
         df.to_csv(filename, index=False, encoding='utf-8')
+        # Nach dem Speichern archivieren und Rolling-Window anwenden
+        self.archive_ohlcv(symbol, market_type=market_type, keep_days=2)
 
     def load_ohlcv_from_file(self, symbol, market_type='spot'):
         """Lädt OHLCV-Daten für ein Symbol/Typ."""
