@@ -384,6 +384,49 @@ with st.expander("Bot Einstellungen", expanded=False):
             "Max Trades/Tag": config.get('execution', {}).get('max_trades_per_day'),
         })
 
+# --- Trade-Statistik-Panel ---
+with st.expander("Trade-Statistiken & Auswertung", expanded=False):
+    st.subheader("Trade-Auswertung & Performance")
+    trade_log_path = "logs/trades.csv"
+    if os.path.exists(trade_log_path) and os.path.getsize(trade_log_path) > 0:
+        trade_df = pd.read_csv(trade_log_path)
+        # Grundauswertung
+        trade_df = trade_df.dropna(subset=["entry_price", "exit_price"])  # nur abgeschlossene Trades
+        trade_df = trade_df[trade_df["outcome"] == "closed"]
+        if not trade_df.empty:
+            trade_df["entry_price"] = pd.to_numeric(trade_df["entry_price"], errors="coerce")
+            trade_df["exit_price"] = pd.to_numeric(trade_df["exit_price"], errors="coerce")
+            trade_df["volume"] = pd.to_numeric(trade_df["volume"], errors="coerce")
+            trade_df["timestamp"] = pd.to_datetime(trade_df["timestamp"], errors="coerce")
+            # Gewinn/Verlust pro Trade (USD)
+            trade_df["pnl"] = (trade_df["exit_price"] - trade_df["entry_price"]) * trade_df["volume"]
+            # Trefferquote
+            win_trades = trade_df[trade_df["pnl"] > 0]
+            loss_trades = trade_df[trade_df["pnl"] <= 0]
+            win_rate = len(win_trades) / len(trade_df) * 100 if len(trade_df) > 0 else 0
+            # Durchschnittliche Haltedauer
+            if "exit_type" in trade_df.columns and "timestamp" in trade_df.columns:
+                trade_df = trade_df.sort_values("timestamp")
+                trade_df["exit_time"] = trade_df["timestamp"].shift(-1)
+                trade_df["hold_time"] = (trade_df["exit_time"] - trade_df["timestamp"]).dt.total_seconds() / 60
+                avg_hold = trade_df["hold_time"].mean()
+            else:
+                avg_hold = None
+            # Gebühren (angenommen: Spalte "fee" oder 0)
+            fee_col = "fee" if "fee" in trade_df.columns else None
+            total_fees = trade_df[fee_col].sum() if fee_col else 0
+            # Gesamtergebnis
+            st.metric("Anzahl Trades", len(trade_df))
+            st.metric("Gewinn/Verlust (USD)", f"{trade_df['pnl'].sum():.2f}")
+            st.metric("Trefferquote", f"{win_rate:.1f}%")
+            st.metric("Ø Haltedauer (Minuten)", f"{avg_hold:.1f}" if avg_hold else "-")
+            st.metric("Gesamte Gebühren", f"{total_fees:.2f}")
+            # Tabelle mit allen Trades
+            st.dataframe(trade_df[[c for c in trade_df.columns if c in ["timestamp","symbol","entry_price","exit_price","pnl","hold_time","fee","exit_type","signal_reason"]]], use_container_width=True)
+        else:
+            st.info("Keine abgeschlossenen Trades für Auswertung gefunden.")
+    else:
+        st.info("Keine Trade-Logdaten gefunden oder Datei ist leer.")
 
 # Panel für die zuletzt gefetchten Binance-Daten
 with st.expander("Binance OHLCV Daten", expanded=False):
@@ -446,15 +489,38 @@ with st.expander("Binance OHLCV Daten", expanded=False):
                 )
                 chart = (rule + bar).properties(title=f"{selected_symbol} Candlestick Chart ({market_type})")
                 # Signal-Punkte (rot, mit Tooltip)
+                layers = [rule, bar]
                 if 'signal' in cdata.columns:
                     signal_points = alt.Chart(cdata[cdata['signal'] == True]).mark_point(color='red', size=80).encode(
                         x=alt.X('timestamp:T'),
                         y=alt.Y('close:Q'),
                         tooltip=['timestamp', 'close', 'signal_reason'] if 'signal_reason' in cdata.columns else ['timestamp', 'close']
                     )
-                    chart = (rule + bar + signal_points).interactive()
-                else:
-                    chart = chart.interactive()
+                    layers.append(signal_points)
+                # Entry/Exit-Marker aus Trade-Log
+                trade_log_path = "logs/trades.csv"
+                if os.path.exists(trade_log_path) and os.path.getsize(trade_log_path) > 0:
+                    trade_df = pd.read_csv(trade_log_path)
+                    trade_df = trade_df[trade_df['symbol'] == selected_symbol]
+                    if not trade_df.empty:
+                        # Entry-Marker (grün)
+                        entry_points = alt.Chart(trade_df).mark_point(color='green', shape='triangle-up', size=100).encode(
+                            x=alt.X('timestamp:T'),
+                            y=alt.Y('entry_price:Q'),
+                            tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
+                        )
+                        # Exit-Marker (blau)
+                        if 'exit_price' in trade_df.columns:
+                            exit_points = alt.Chart(trade_df.dropna(subset=['exit_price'])).mark_point(color='blue', shape='triangle-down', size=100).encode(
+                                x=alt.X('timestamp:T'),
+                                y=alt.Y('exit_price:Q'),
+                                tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
+                            )
+                            layers.append(entry_points)
+                            layers.append(exit_points)
+                        else:
+                            layers.append(entry_points)
+                chart = alt.layer(*layers).interactive()
                 st.altair_chart(chart, use_container_width=True)
                 # Volumen als separater interaktiver Chart
                 if 'volume' in df_symbol.columns:
