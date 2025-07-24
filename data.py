@@ -77,10 +77,24 @@ class DataFetcher:
         return f'logs/ohlcv_{base}_futures.csv' if market_type == 'futures' else f'logs/ohlcv_{base}.csv'
 
     def save_ohlcv_to_file(self, df, symbol, market_type='spot'):
-        """Speichert OHLCV-Daten für ein Symbol/Typ und archiviert ältere Daten automatisch."""
+        """Speichert OHLCV-Daten für ein Symbol/Typ und archiviert ältere Daten automatisch.
+        Berechnet und speichert die Spalten 'signal' und 'signal_reason' für Nachvollziehbarkeit."""
         filename = self.get_ohlcv_filename(symbol, market_type)
+        # Signale und Gründe berechnen
+        try:
+            from strategy import get_strategy
+            strategies = get_strategy(self.config)
+            strat = strategies['spot_long'] if market_type == 'spot' else strategies['futures_short']
+            df = strat.get_signals_and_reasons(df)
+        except Exception:
+            # Falls Strategie-Berechnung fehlschlägt, Spalten sicherstellen
+            if 'signal' not in df.columns:
+                df['signal'] = False
+            if 'signal_reason' not in df.columns:
+                df['signal_reason'] = ''
+        # Speichern
         df.to_csv(filename, index=False, encoding='utf-8')
-        # Nach dem Speichern archivieren und Rolling-Window anwenden
+        # Archivieren und Rolling-Window anwenden
         self.archive_ohlcv(symbol, market_type=market_type, keep_days=2)
 
     def load_ohlcv_from_file(self, symbol, market_type='spot', create_if_missing=True):

@@ -98,7 +98,7 @@ class SpotLongStrategy(BaseStrategy):
             else:
                 r = []
                 if not (row['price_change'] > self.price_change_pct):
-                    r.append('Preisänderung zu gering ({:.2f}% / Schwelle: {:.2f}%)'.format(price_chg if price_chg is not None else float('nan'), self.price_change_pct*100))
+                    r.append(f"Preisänderung zu gering: {price_chg:.2f}% < {self.price_change_pct*100:.2f}%")
                 if not (row['volume'] > self.volume_mult * row['vol_mean']):
                     r.append('Volumen nicht hoch genug ({:.2f}x / Schwelle: {:.2f}x)'.format(vol_mult if vol_mult is not None else float('nan'), self.volume_mult))
                 if not (row['rsi'] > self.rsi_long):
@@ -161,7 +161,7 @@ class FuturesShortStrategy(BaseStrategy):
             else:
                 r = []
                 if not (row['price_change'] < -self.price_change_pct):
-                    r.append('Preisfall zu gering ({:.2f}% / Schwelle: -{:.2f}%)'.format(price_chg if price_chg is not None else float('nan'), self.price_change_pct*100))
+                    r.append(f"Preisfall zu gering: {price_chg:.2f}% > -{self.price_change_pct*100:.2f}%")
                 if not (row['volume'] > self.volume_mult * row['vol_mean']):
                     r.append('Volumen nicht hoch genug ({:.2f}x / Schwelle: {:.2f}x)'.format(vol_mult if vol_mult is not None else float('nan'), self.volume_mult))
                 if not (row['rsi'] < self.rsi_short):
