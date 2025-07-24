@@ -33,7 +33,10 @@ class DataFetcher:
         if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         # Trenne in zu archivierende und zu behaltende Daten
-        cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=keep_days)
+        # Stelle sicher, dass sowohl cutoff als auch df['timestamp'] tz-naiv (UTC) sind
+        if df['timestamp'].dt.tz is not None:
+            df['timestamp'] = df['timestamp'].dt.tz_convert('UTC').dt.tz_localize(None)
+        cutoff = pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=keep_days)
         to_archive = df[df['timestamp'] < cutoff]
         to_keep = df[df['timestamp'] >= cutoff]
         if not to_archive.empty:
