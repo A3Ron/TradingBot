@@ -1,12 +1,12 @@
+
 import ccxt
 import pandas as pd
-import pandas_ta as ta
 import logging
 import os
 from dotenv import load_dotenv
 load_dotenv()
 
-# Logger für Bot-Logdatei einrichten (robust, mehrfach verwendbar)
+# Logger für Bot-Logdatei (Singleton)
 def get_bot_logger():
     logger = logging.getLogger("tradingbot")
     logger.setLevel(logging.DEBUG)
@@ -21,8 +21,51 @@ logger = get_bot_logger()
 
 class DataFetcher:
 
+    def fetch_full_portfolio(self):
+        """Holt Spot- und Futures-Portfolio getrennt und gibt beide plus das Total zurück."""
+        import copy
+        spot_config = copy.deepcopy(self.config)
+        spot_config['trading']['futures'] = False
+        futures_config = copy.deepcopy(self.config)
+        futures_config['trading']['futures'] = True
+        spot = DataFetcher(spot_config).fetch_portfolio()
+        futures = DataFetcher(futures_config).fetch_portfolio()
+        total_value = (spot.get('total_value', 0.0) if spot else 0.0) + (futures.get('total_value', 0.0) if futures else 0.0)
+        return {'spot': spot, 'futures': futures, 'total_value': total_value}
+
+    def get_ohlcv_filename(self, symbol, market_type='spot'):
+        """Dateiname für Symbol und Markt-Typ."""
+        base = symbol.replace('/', '')
+        return f'logs/ohlcv_{base}_futures.csv' if market_type == 'futures' else f'logs/ohlcv_{base}.csv'
+
+    def save_ohlcv_to_file(self, df, symbol, market_type='spot'):
+        """Speichert OHLCV-Daten für ein Symbol/Typ."""
+        filename = self.get_ohlcv_filename(symbol, market_type)
+        df.to_csv(filename, index=False, encoding='utf-8')
+
+    def load_ohlcv_from_file(self, symbol, market_type='spot'):
+        """Lädt OHLCV-Daten für ein Symbol/Typ."""
+        filename = self.get_ohlcv_filename(symbol, market_type)
+        if os.path.exists(filename):
+            return pd.read_csv(filename, parse_dates=['timestamp'])
+        return pd.DataFrame()
+
+    def fetch_and_save_ohlcv_for_symbols(self, symbols, market_type='spot', limit=500):
+        """Lädt und speichert OHLCV-Daten für alle angegebenen Symbole/Typen."""
+        for symbol in symbols:
+            self.symbol = symbol
+            try:
+                df = self.fetch_ohlcv(limit=limit)
+                if not df.empty:
+                    self.save_ohlcv_to_file(df, symbol, market_type)
+                    logger.info(f'[INFO] OHLCV für {symbol} ({market_type}) gespeichert.')
+                else:
+                    logger.warning(f'[WARN] Keine OHLCV-Daten für {symbol} ({market_type}) geladen.')
+            except Exception as e:
+                logger.error(f'[ERROR] Fehler beim Laden/Speichern von OHLCV für {symbol} ({market_type}): {e}')
+
     def get_spot_symbols(self):
-        """Liefert alle verfügbaren Spot-Symbole im Format BASE/QUOTE (z.B. BTC/USDT)."""
+        """Alle verfügbaren Spot-Symbole (BASE/QUOTE)."""
         try:
             markets = self.exchange.load_markets()
             return sorted([m.replace('_', '/') for m in markets if markets[m]['spot'] and markets[m]['active'] and '/' in m])
@@ -31,7 +74,7 @@ class DataFetcher:
             return []
 
     def get_futures_symbols(self):
-        """Liefert alle verfügbaren USDT-M Perpetual Futures-Symbole im Format BASEUSDT (z.B. PEPEUSDT, BTCUSDT) direkt von der Binance REST-API."""
+        """Alle verfügbaren USDT-M Perpetual Futures-Symbole (BASEUSDT) von Binance REST-API."""
         import requests
         try:
             url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
@@ -62,7 +105,6 @@ class DataFetcher:
         self.timeframe = trading_cfg.get('timeframe')
 
     def _init_exchange(self):
-        import os
         mode = self.config['execution']['mode']
         is_futures = self.config.get('trading', {}).get('futures', False)
         if mode == 'testnet':
@@ -88,11 +130,7 @@ class DataFetcher:
         else:
             api_key = os.getenv('BINANCE_API_KEY')
             api_secret = os.getenv('BINANCE_API_SECRET')
-            # Für Futures: explizit USDT-M Perpetual Optionen setzen
-            if is_futures:
-                options = {'defaultType': 'future', 'contractType': 'PERPETUAL'}
-            else:
-                options = {'defaultType': 'spot'}
+            options = {'defaultType': 'future', 'contractType': 'PERPETUAL'} if is_futures else {'defaultType': 'spot'}
             self.exchange = ccxt.binance({
                 'apiKey': api_key,
                 'secret': api_secret,
@@ -100,97 +138,51 @@ class DataFetcher:
                 'options': options,
             })
 
-    def fetch_full_portfolio(self):
-        """Holt Spot- und Futures-Portfolio getrennt und gibt beide plus das Total zurück."""
-        import copy
-        spot_config = copy.deepcopy(self.config)
-        spot_config['trading']['futures'] = False
-        futures_config = copy.deepcopy(self.config)
-        futures_config['trading']['futures'] = True
-        spot_fetcher = DataFetcher(spot_config)
-        futures_fetcher = DataFetcher(futures_config)
-        spot = spot_fetcher.fetch_portfolio()
-        futures = futures_fetcher.fetch_portfolio()
-        total_value = 0.0
-        if spot and 'total_value' in spot:
-            total_value += spot['total_value']
-        if futures and 'total_value' in futures:
-            total_value += futures['total_value']
-        return {
-            'spot': spot,
-            'futures': futures,
-            'total_value': total_value
-        }
-
     def fetch_portfolio(self):
-        """Fetches current portfolio balances and asset values from Binance."""
+        """Lädt aktuelle Portfolio-Balances und Asset-Werte von Binance."""
         try:
-            balances = None
             try:
                 balances = self.exchange.fetch_balance()
             except Exception as api_ex:
                 logger.error(f"[ERROR] fetch_balance API-Fehler: {api_ex}")
                 return {'assets': [], 'total_value': 0.0, 'prices': {}}
-            assets = []
-            total_value = 0.0
-            prices = {}
+            assets, total_value, prices = [], 0.0, {}
             if not balances or 'total' not in balances or not isinstance(balances['total'], dict):
                 logger.error(f"[ERROR] 'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
                 return {'assets': [], 'total_value': 0.0, 'prices': {}}
             for asset, info in balances['total'].items():
-                if info is None or info == 0:
+                if not info:
                     continue
                 if asset.upper() in ["USDT", "BUSD", "USDC"]:
                     price = 1.0
-                    value = info
-                    prices[asset] = price
-                    total_value += value
-                    assets.append({
-                        'asset': asset,
-                        'amount': info,
-                        'price': price,
-                        'value': value
-                    })
                 else:
                     symbol = asset + '/USDT'
                     try:
                         ticker = self.exchange.fetch_ticker(symbol)
-                        price = ticker.get('last') or ticker.get('close')
+                        price = ticker.get('last') or ticker.get('close') or 0.0
                         if price is None:
                             logger.warning(f"[WARN] Kein Preis für {symbol} gefunden: {ticker}")
                             price = 0.0
-                        value = info * price
-                        prices[asset] = price
-                        total_value += value
-                        assets.append({
-                            'asset': asset,
-                            'amount': info,
-                            'price': price,
-                            'value': value
-                        })
                     except Exception as ex:
                         logger.error(f"[ERROR] Ticker-Fehler für {symbol}: {ex}")
-                        assets.append({
-                            'asset': asset,
-                            'amount': info,
-                            'price': None,
-                            'value': None
-                        })
+                        price = None
+                value = info * price if price is not None else None
+                if price is not None:
+                    prices[asset] = price
+                    total_value += value
+                assets.append({'asset': asset, 'amount': info, 'price': price, 'value': value})
             return {'assets': assets, 'total_value': total_value, 'prices': prices}
         except Exception as e:
             logger.error(f"[ERROR] Portfolio fetch failed: {e}")
             return {'assets': [], 'total_value': 0.0, 'prices': {}}
 
     def fetch_ohlcv(self, limit=50):
+        """Lädt OHLCV-Daten für das aktuelle Symbol/Timeframe."""
         import requests
         if hasattr(self, 'exchange') and hasattr(self.exchange, 'urls') and self.exchange.urls['api']['public'].startswith('https://testnet.binance.vision'):
-            # Hole Daten direkt vom Spot-Testnet
             logger.info('[INFO] Fetching OHLCV from Binance Spot Testnet via HTTP')
             base_url = 'https://testnet.binance.vision/api/v3/klines'
-            params = {
-                'symbol': self.symbol.replace('/', ''),
-                'limit': limit
-            }
+            params = {'symbol': self.symbol.replace('/', ''), 'limit': limit}
             try:
                 response = requests.get(base_url, params=params, timeout=10)
                 if response.status_code != 200:

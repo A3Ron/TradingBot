@@ -1,6 +1,8 @@
 # --- Imports ---
 import streamlit as st
 import pandas as pd
+from datetime import timedelta
+import altair as alt
 import os
 import yaml
 import subprocess
@@ -385,25 +387,25 @@ with st.expander("Bot Einstellungen", expanded=False):
 
 # Panel für die zuletzt gefetchten Binance-Daten
 with st.expander("Binance OHLCV Daten", expanded=False):
-    st.subheader("Letzte OHLCV-Daten aller Symbole")
-    ohlcv_latest_path = "logs/ohlcv_latest.csv"
-    if os.path.exists(ohlcv_latest_path) and os.path.getsize(ohlcv_latest_path) > 0:
-        import pandas as pd
-        from datetime import datetime, timedelta
-        ohlcv_df = pd.read_csv(ohlcv_latest_path)
-        # Zeitstempel als datetime parsen
-        ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'])
-        # Nur gültige Symbole anzeigen (aus Session-State)
-        valid_symbols = set(st.session_state.get('spot_symbols', [])) | set(st.session_state.get('futures_symbols', []))
-        file_symbols = sorted([s for s in ohlcv_df['symbol'].unique() if s in valid_symbols]) if 'symbol' in ohlcv_df.columns else []
-        # Session-State für Symbol
-        if file_symbols:
-            if 'selected_symbol' not in st.session_state or st.session_state['selected_symbol'] not in file_symbols:
-                st.session_state['selected_symbol'] = file_symbols[0]
-            selected_symbol = st.selectbox("Symbol wählen", file_symbols, key='selected_symbol')
+    st.subheader("Letzte OHLCV-Daten pro Symbol und Markt-Typ")
+    # Auswahl Spot/Futures
+    market_type = st.radio("Markt-Typ wählen", ["spot", "futures"], horizontal=True, key="market_type")
+    # Verfügbare Symbole je nach Markt-Typ
+    symbols = st.session_state.get(f"{market_type}_symbols", [])
+    if not symbols:
+        st.warning(f"Keine {market_type.capitalize()}-Symbole gefunden!")
+    else:
+        # Symbolauswahl
+        if f"selected_{market_type}_symbol" not in st.session_state or st.session_state[f"selected_{market_type}_symbol"] not in symbols:
+            st.session_state[f"selected_{market_type}_symbol"] = symbols[0]
+        selected_symbol = st.selectbox("Symbol wählen", symbols, key=f"selected_{market_type}_symbol")
+        # Datei bestimmen
+        base = selected_symbol.replace('/', '')
+        if market_type == 'futures':
+            ohlcv_path = f"logs/ohlcv_{base}_futures.csv"
         else:
-            selected_symbol = None
-        # Zeitraum-Optionen mit Session-State
+            ohlcv_path = f"logs/ohlcv_{base}.csv"
+        # Zeitraum-Optionen
         time_ranges = {
             "5m": timedelta(minutes=5),
             "1h": timedelta(hours=1),
@@ -413,23 +415,24 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         if 'selected_range' not in st.session_state or st.session_state['selected_range'] not in time_range_keys:
             st.session_state['selected_range'] = time_range_keys[1]
         selected_range = st.selectbox("Zeitraum", time_range_keys, key='selected_range')
-        now = ohlcv_df['timestamp'].max()
-        time_filter = now - time_ranges[selected_range]
-        chart_cols = ["open", "high", "low", "close"]
-        color_map = {
-            "open": "#1f77b4",
-            "high": "#2ca02c",
-            "low": "#d62728",
-            "close": "#ff7f0e"
-        }
-        if selected_symbol:
-            df_symbol = ohlcv_df[ohlcv_df['symbol'] == selected_symbol]
-            df_symbol = df_symbol[df_symbol['timestamp'] >= time_filter].copy()
+        # Datei laden
+        if os.path.exists(ohlcv_path) and os.path.getsize(ohlcv_path) > 0:
+            ohlcv_df = pd.read_csv(ohlcv_path)
+            if 'timestamp' in ohlcv_df.columns:
+                ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'])
+            now = ohlcv_df['timestamp'].max()
+            time_filter = now - time_ranges[selected_range]
+            chart_cols = ["open", "high", "low", "close"]
+            color_map = {
+                "open": "#1f77b4",
+                "high": "#2ca02c",
+                "low": "#d62728",
+                "close": "#ff7f0e"
+            }
+            df_symbol = ohlcv_df[ohlcv_df['timestamp'] >= time_filter].copy()
             if df_symbol.empty:
                 st.info("Keine Daten für diesen Zeitraum/Symbol.")
             else:
-                # Chart für Open, High, Low, Close
-                import altair as alt
                 chart_data = df_symbol.set_index('timestamp')[chart_cols].reset_index()
                 price_min = chart_data[chart_cols].min().min()
                 price_max = chart_data[chart_cols].max().max()
@@ -437,35 +440,32 @@ with st.expander("Binance OHLCV Daten", expanded=False):
                     x=alt.X('timestamp:T', title='Zeit'),
                     y=alt.Y('value:Q', title='Preis', scale=alt.Scale(domain=[price_min, price_max])),
                     color=alt.Color('variable:N', scale=alt.Scale(domain=chart_cols, range=[color_map[c] for c in chart_cols]), legend=alt.Legend(title="Preis-Typ"))
-                ).properties(title=f"{selected_symbol} Open/High/Low/Close")
+                ).properties(title=f"{selected_symbol} Open/High/Low/Close ({market_type})")
                 chart = chart.interactive()
                 # Marker für Trade-Signale aus Spalte 'signal'
                 if 'signal' in df_symbol.columns:
                     signal_points = alt.Chart(df_symbol[df_symbol['signal'] == True]).mark_point(color='red', size=80).encode(
                         x=alt.X('timestamp:T'),
                         y=alt.Y('close:Q'),
-                        tooltip=['timestamp', 'close', 'signal_reason']
+                        tooltip=['timestamp', 'close', 'signal_reason'] if 'signal_reason' in df_symbol.columns else ['timestamp', 'close']
                     )
                     st.altair_chart(chart + signal_points, use_container_width=True)
                 else:
                     st.altair_chart(chart, use_container_width=True)
-                # Volumen als separater interaktiver Chart mit automatischer Skalierung
-                vol_min = df_symbol['volume'].min()
-                vol_max = df_symbol['volume'].max()
-                vol_chart = alt.Chart(df_symbol).mark_area(color="#888888", opacity=0.5).encode(
-                    x=alt.X('timestamp:T', title='Zeit'),
-                    y=alt.Y('volume:Q', title='Volumen', scale=alt.Scale(domain=[vol_min, vol_max]))
-                ).properties(title=f"{selected_symbol} Volumen")
-                vol_chart = vol_chart.interactive()
-                st.altair_chart(vol_chart, use_container_width=True)
-            # Tabelle mit allen Werten im gewählten Zeitraum und Symbol inkl. Signal-Grund
-            st.dataframe(df_symbol)
+                # Volumen als separater interaktiver Chart
+                if 'volume' in df_symbol.columns:
+                    vol_min = df_symbol['volume'].min()
+                    vol_max = df_symbol['volume'].max()
+                    vol_chart = alt.Chart(df_symbol).mark_area(color="#888888", opacity=0.5).encode(
+                        x=alt.X('timestamp:T', title='Zeit'),
+                        y=alt.Y('volume:Q', title='Volumen', scale=alt.Scale(domain=[vol_min, vol_max]))
+                    ).properties(title=f"{selected_symbol} Volumen ({market_type})")
+                    vol_chart = vol_chart.interactive()
+                    st.altair_chart(vol_chart, use_container_width=True)
+                # Tabelle mit allen Werten im gewählten Zeitraum und Symbol
+                st.dataframe(df_symbol)
         else:
-            df_filtered = ohlcv_df[ohlcv_df['timestamp'] >= time_filter]
-            # Tabelle mit allen Werten im gewählten Zeitraum (alle Symbole)
-            st.dataframe(df_filtered)
-    else:
-        st.write("Keine OHLCV-Daten geladen oder Datei ist leer.")
+            st.write("Keine OHLCV-Daten für dieses Symbol/Markt-Typ geladen oder Datei ist leer.")
 
 # Trade Log Panel direkt vor Bot Log
 with st.expander("Trade Log", expanded=False):

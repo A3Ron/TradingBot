@@ -1,119 +1,14 @@
 import ccxt
-import yaml
-from dotenv import load_dotenv
-load_dotenv()
+import logging
 
-class Trader:
-    def monitor_trade(self, trade, df, strategy):
-        """
-        Überwacht einen offenen Trade und prüft alle Exit-Bedingungen:
-        - Take-Profit
-        - Stop-Loss
-        - Momentum-Exit (RSI < momentum_exit_rsi)
-        - Trailing-Stop (SL auf Entry nachziehen)
-        Gibt den Exit-Typ zurück oder None, wenn Trade offen bleibt.
-        """
-        current_price = df['close'].iloc[-1]
-        # 1. Take-Profit
-        if current_price >= trade.take_profit:
-            self.logger.info(f"Take-Profit erreicht: {current_price} >= {trade.take_profit}")
-            self.send_telegram(f"Take-Profit erreicht: {current_price} >= {trade.take_profit}")
-            return "take_profit"
-        # 2. Stop-Loss
-        if current_price <= trade.stop_loss:
-            self.logger.info(f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}")
-            self.send_telegram(f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}")
-            return "stop_loss"
-        # 3. Momentum-Exit
-        if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
-            self.logger.info(f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}")
-            self.send_telegram(f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}")
-            return "momentum_exit"
-        # 4. Trailing-Stop
-        if hasattr(strategy, 'get_trailing_stop'):
-            trailing_stop = strategy.get_trailing_stop(trade.entry, current_price)
-            if trailing_stop is not None and current_price > trade.entry:
-                old_sl = trade.stop_loss
-                trade.stop_loss = trailing_stop
-                self.logger.info(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
-                self.send_telegram(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
-        return None  # Trade bleibt offen
-    def __init__(self, config):
-        import logging
+class BaseTrader:
+    def __init__(self, config, symbol):
         self.config = config
-        self.exchange = ccxt.binance({
-            'apiKey': config['binance']['api_key'],
-            'secret': config['binance']['api_secret'],
-            'enableRateLimit': True,
-        })
-        self.symbol = config['trading']['symbol']
+        self.symbol = symbol
         self.mode = config['execution']['mode']
         self.telegram_token = config['telegram']['token']
         self.telegram_chat_id = config['telegram']['chat_id']
-        self.is_futures = config['trading'].get('futures', False)
-        # Setup logging
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-        self.logger = logging.getLogger('Trader')
-
-    def execute_trade(self, signal):
-        volume = self.get_trade_volume(signal)
-        msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
-        if self.mode == 'testnet':
-            self.logger.info(f"[TESTNET] {msg}")
-            self.send_telegram(f"[TESTNET] {msg}")
-            return True
-        # Live mode
-        try:
-            if self.is_futures:
-                order = self.exchange.create_market_buy_order(
-                    self.symbol,
-                    volume,
-                    params={"reduceOnly": False}
-                )
-            else:
-                order = self.exchange.create_market_buy_order(
-                    self.symbol,
-                    volume
-                )
-            self.logger.info(f"Order executed: {order}")
-            self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
-            return order
-        except Exception as e:
-            self.logger.error(f"Trade failed: {e}")
-            self.send_telegram(f"LONG Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
-            return None
-
-    def set_stop_loss_take_profit(self, _, stop_loss, take_profit):
-        self.logger.info(f"Set SL: {stop_loss}, TP: {take_profit}")
-        # Implement OCO or manual orders if needed
-        self.send_telegram(f"Set SL: {stop_loss}, TP: {take_profit}")
-
-    def execute_short_trade(self, signal):
-        volume = self.get_trade_volume(signal)
-        msg = f"SHORT {self.symbol} @ {signal.entry} Vol: {volume}"
-        if self.mode == 'testnet':
-            self.logger.info(f"[TESTNET] {msg}")
-            self.send_telegram(f"[TESTNET] {msg}")
-            return True
-        try:
-            if self.is_futures:
-                order = self.exchange.create_market_sell_order(
-                    self.symbol,
-                    volume,
-                    params={"reduceOnly": False}
-                )
-            else:
-                order = self.exchange.create_market_sell_order(
-                    self.symbol,
-                    volume
-                )
-            self.logger.info(f"Short order executed: {order}")
-            self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
-            return order
-        except Exception as e:
-            self.logger.error(f"Short trade failed: {e}")
-            self.send_telegram(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
-            return None
+        self.logger = logging.getLogger(f'Trader-{symbol}')
 
     def send_telegram(self, message):
         if not self.telegram_token or not self.telegram_chat_id:
@@ -125,8 +20,8 @@ class Trader:
             requests.post(url, data=data)
         except Exception as e:
             self.logger.warning(f"Telegram error: {e}")
+
     def get_trade_volume(self, signal):
-        # Berechne Volumen so, dass maximal 1% des Guthabens bei Stop-Loss verloren gehen kann
         try:
             balance = self.exchange.fetch_balance()
             base = self.symbol.split('/')[0]
@@ -139,8 +34,114 @@ class Trader:
                 self.logger.warning("Stop-Loss gleich Entry, Volumen auf Minimum gesetzt.")
                 return min(available, signal.volume)
             volume = max_loss / risk_per_unit
-            # Fallback falls Signal-Volumen kleiner ist
             return min(volume, signal.volume, available)
         except Exception as e:
             self.logger.warning(f"Konnte Guthaben nicht abrufen, nutze Signal-Volumen: {e}")
             return signal.volume
+
+class SpotLongTrader(BaseTrader):
+    def __init__(self, config, symbol):
+        super().__init__(config, symbol)
+        self.exchange = ccxt.binance({
+            'apiKey': config['binance']['api_key'],
+            'secret': config['binance']['api_secret'],
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+
+    def execute_trade(self, signal):
+        volume = self.get_trade_volume(signal)
+        msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
+        if self.mode == 'testnet':
+            self.logger.info(f"[TESTNET] {msg}")
+            self.send_telegram(f"[TESTNET] {msg}")
+            return True
+        try:
+            order = self.exchange.create_market_buy_order(
+                self.symbol,
+                volume
+            )
+            self.logger.info(f"Order executed: {order}")
+            self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
+            return order
+        except Exception as e:
+            self.logger.error(f"Trade failed: {e}")
+            self.send_telegram(f"LONG Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
+            return None
+
+    def monitor_trade(self, trade, df, strategy):
+        current_price = df['close'].iloc[-1]
+        if current_price >= trade.take_profit:
+            self.logger.info(f"Take-Profit erreicht: {current_price} >= {trade.take_profit}")
+            self.send_telegram(f"Take-Profit erreicht: {current_price} >= {trade.take_profit}")
+            return "take_profit"
+        if current_price <= trade.stop_loss:
+            self.logger.info(f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}")
+            self.send_telegram(f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}")
+            return "stop_loss"
+        if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
+            self.logger.info(f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            self.send_telegram(f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            return "momentum_exit"
+        if hasattr(strategy, 'get_trailing_stop'):
+            trailing_stop = strategy.get_trailing_stop(trade.entry, current_price)
+            if trailing_stop is not None and current_price > trade.entry:
+                old_sl = trade.stop_loss
+                trade.stop_loss = trailing_stop
+                self.logger.info(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+                self.send_telegram(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+        return None
+
+class FuturesShortTrader(BaseTrader):
+    def __init__(self, config, symbol):
+        super().__init__(config, symbol)
+        self.exchange = ccxt.binance({
+            'apiKey': config['binance']['api_key'],
+            'secret': config['binance']['api_secret'],
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future', 'contractType': 'PERPETUAL'}
+        })
+
+    def execute_trade(self, signal):
+        volume = self.get_trade_volume(signal)
+        msg = f"SHORT {self.symbol} @ {signal.entry} Vol: {volume}"
+        if self.mode == 'testnet':
+            self.logger.info(f"[TESTNET] {msg}")
+            self.send_telegram(f"[TESTNET] {msg}")
+            return True
+        try:
+            order = self.exchange.create_market_sell_order(
+                self.symbol,
+                volume,
+                params={"reduceOnly": False}
+            )
+            self.logger.info(f"Short order executed: {order}")
+            self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
+            return order
+        except Exception as e:
+            self.logger.error(f"Short trade failed: {e}")
+            self.send_telegram(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
+            return None
+
+    def monitor_trade(self, trade, df, strategy):
+        current_price = df['close'].iloc[-1]
+        if current_price <= trade.take_profit:
+            self.logger.info(f"Take-Profit erreicht: {current_price} <= {trade.take_profit}")
+            self.send_telegram(f"Take-Profit erreicht: {current_price} <= {trade.take_profit}")
+            return "take_profit"
+        if current_price >= trade.stop_loss:
+            self.logger.info(f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}")
+            self.send_telegram(f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}")
+            return "stop_loss"
+        if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
+            self.logger.info(f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            self.send_telegram(f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            return "momentum_exit"
+        if hasattr(strategy, 'get_trailing_stop'):
+            trailing_stop = strategy.get_trailing_stop(trade.entry, current_price)
+            if trailing_stop is not None and current_price < trade.entry:
+                old_sl = trade.stop_loss
+                trade.stop_loss = trailing_stop
+                self.logger.info(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+                self.send_telegram(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+        return None
