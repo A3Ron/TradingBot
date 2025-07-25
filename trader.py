@@ -62,15 +62,21 @@ class BaseTrader:
 class SpotLongTrader(BaseTrader):
     def __init__(self, config, symbol):
         super().__init__(config, symbol)
-        # Load API credentials from environment, fallback to config
         api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
         api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')
-        self.exchange = ccxt.binance({
-            'apiKey': api_key,
-            'secret': api_secret,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
+        if not api_key or not api_secret:
+            self.data.save_log('ERROR', 'trader', 'Binance API-Key oder Secret fehlt!')
+            raise ValueError('Binance API-Key oder Secret fehlt!')
+        try:
+            self.exchange = ccxt.binance({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            })
+        except Exception as e:
+            self.data.save_log('ERROR', 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
+            raise
 
     def execute_trade(self, signal):
         # Determine base volume by risk percentage logic
@@ -184,15 +190,21 @@ class SpotLongTrader(BaseTrader):
 class FuturesShortTrader(BaseTrader):
     def __init__(self, config, symbol):
         super().__init__(config, symbol)
-        # Load API credentials from environment, fallback to config
         api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
         api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')
-        self.exchange = ccxt.binance({
-            'apiKey': api_key,
-            'secret': api_secret,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future', 'contractType': 'PERPETUAL'}
-        })
+        if not api_key or not api_secret:
+            self.data.save_log('ERROR', 'trader', 'Binance API-Key oder Secret fehlt!')
+            raise ValueError('Binance API-Key oder Secret fehlt!')
+        try:
+            self.exchange = ccxt.binance({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'future', 'contractType': 'PERPETUAL'}
+            })
+        except Exception as e:
+            self.data.save_log('ERROR', 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
+            raise
 
     def execute_trade(self, signal):
         # Use fixed notional amount (25 USDT) for futures trades
@@ -206,7 +218,7 @@ class FuturesShortTrader(BaseTrader):
         # Update signal volume to executed amount later
         msg = f"SHORT {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
-            self.data.save_log('INFO', f"[TESTNET] {msg}")
+            self.data.save_log('INFO', 'trader', f"[TESTNET] {msg}")
             self.send_telegram(f"[TESTNET] {msg}")
             # Testnet-Trade als Dummy in DB speichern
             trade_dict = {
@@ -251,8 +263,8 @@ class FuturesShortTrader(BaseTrader):
             self.data.save_log('INFO', 'trader', f"Trade saved to DB: {trade_dict}")
             return order
         except Exception as e:
-            self.send_telegram(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             self.data.save_log('ERROR', 'trader', f"Short trade failed: {e}")
+            self.send_telegram(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
     def monitor_trade(self, trade, df, strategy):
