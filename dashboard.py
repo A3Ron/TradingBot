@@ -11,6 +11,8 @@ from streamlit_autorefresh import st_autorefresh
 from dotenv import load_dotenv
 load_dotenv()
 from data import DataFetcher
+import re
+
 
 # Alle 59 Sekunden neu laden
 st_autorefresh(interval=59 * 1000, key="refresh")
@@ -28,10 +30,21 @@ def convert_to_swiss_time(ts):
 
 # --- Function Definitions ---
 
+def resolve_env_vars(obj):
+    if isinstance(obj, dict):
+        return {k: resolve_env_vars(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [resolve_env_vars(i) for i in obj]
+    elif isinstance(obj, str):
+        return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), ""), obj)
+    else:
+        return obj
+
 def load_config(config_path):
     if os.path.exists(config_path):
         with open(config_path) as f:
-            return yaml.safe_load(f)
+            cfg = yaml.safe_load(f)
+        return resolve_env_vars(cfg)
     return {}
 
 def get_pid():
@@ -82,8 +95,7 @@ config_path = "config.yaml"
 PID_FILE = "bot.pid"
 MAIN_SCRIPT = "main.py"
 config = load_config(config_path)
-# Single DataFetcher instance
-dfetcher = DataFetcher(config)
+dfetcher = DataFetcher()
 trade_df = dfetcher.load_trades_from_db(limit=1000)
 
 # --- UI Code ---
@@ -110,13 +122,10 @@ st.markdown(f"**Bot Status:** {'🟢 Läuft (PID: ' + str(pid) + ')' if running 
 # Portfolio Panel mit Session-State für Asset-Auswahl
 with st.expander("Portfolio Übersicht", expanded=True):
     try:
-        with open('config.yaml') as f:
-            config_portfolio = yaml.safe_load(f)
-        fetcher = DataFetcher(config_portfolio)
-        full_portfolio = fetcher.fetch_full_portfolio()
-        spot = full_portfolio.get('spot', {})
-        futures = full_portfolio.get('futures', {})
-        total_value = full_portfolio.get('total_value', 0.0)
+        portfolio = dfetcher.fetch_portfolio()
+        spot = portfolio.get('spot', {})
+        futures = portfolio.get('futures', {})
+        total_value = portfolio.get('total_value', 0.0)
         # Spot
         st.subheader('Spot-Konto')
         spot_assets = spot.get('assets', [])
@@ -225,7 +234,6 @@ with st.expander("Bot Einstellungen", expanded=False):
         import yaml
         import time
         from pathlib import Path
-        from data import DataFetcher
         def load_or_update_symbols(symbol_type, config):
             cache_file = f"{symbol_type}_symbols.yaml"
             cache_path = Path(cache_file)
@@ -243,11 +251,10 @@ with st.expander("Bot Einstellungen", expanded=False):
                 if (not symbols) or (age >= max_age):
                     symbols = []  # erzwinge Neuladen
             if not symbols:
-                fetcher = DataFetcher(config)
                 if symbol_type == 'spot':
-                    symbols = fetcher.get_spot_symbols()
+                    symbols = dfetcher.get_spot_symbols()
                 else:
-                    symbols = fetcher.get_futures_symbols()
+                    symbols = dfetcher.get_futures_symbols()
                 # Nur speichern, wenn nicht leer
                 if symbols:
                     try:

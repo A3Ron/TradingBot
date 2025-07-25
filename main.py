@@ -2,17 +2,20 @@
 import os
 import yaml
 import time
-import logging
+import re
 from dotenv import load_dotenv
 from data import DataFetcher
 from trader import SpotLongTrader, FuturesShortTrader
-from logger import Logger
-
 
 # --- Konstanten ---
 CONFIG_PATH = 'config.yaml'
 STRATEGY_PATH = 'strategy_high_volatility_breakout_momentum.yaml'
 
+# --- Globale Variablen für offene Trades und letzte Candle ---
+open_trade_spot = None
+open_trade_futures = None
+last_candle_time_spot = None
+last_candle_time_futures = None
 
 # --- Funktionen ---
 
@@ -56,11 +59,21 @@ def format_startup_message(config):
     return msg
 
 # --- Initialisierung ---
+
+def resolve_env_vars(obj):
+    if isinstance(obj, dict):
+        return {k: resolve_env_vars(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [resolve_env_vars(i) for i in obj]
+    elif isinstance(obj, str):
+        return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), ""), obj)
+    else:
+        return obj
+
 load_dotenv()
 with open(CONFIG_PATH) as f:
     config = yaml.safe_load(f)
-
-logger = Logger()
+config = resolve_env_vars(config)
 
 # Ersetze Telegram-Token und Chat-ID durch Umgebungsvariablen
 config['telegram']['token'] = os.getenv('TELEGRAM_TOKEN')
@@ -81,9 +94,7 @@ futures_strategy = strategies['futures_short']
 spot_traders = {symbol: SpotLongTrader(config, symbol) for symbol in spot_symbols}
 futures_traders = {symbol: FuturesShortTrader(config, symbol) for symbol in futures_symbols}
 
-# DataFetcher für beide Typen
-spot_datafetcher = DataFetcher(config)
-futures_datafetcher = DataFetcher(config)
+dfetcher = DataFetcher()
 
 # Sende Startnachricht mit wichtigsten Infos (nur einmal)
 startup_msg = format_startup_message(config)
@@ -97,7 +108,6 @@ elif futures_traders:
 # --- Hauptloop ---
 open_trades_spot = {symbol: None for symbol in spot_symbols}
 open_trades_futures = {symbol: None for symbol in futures_symbols}
-logger = Logger(config)
 
 
 def handle_spot_trades():
@@ -105,11 +115,11 @@ def handle_spot_trades():
     candidate_spot = []
     for symbol in spot_symbols:
         try:
-            df = spot_datafetcher.load_ohlcv_from_file(symbol, 'spot')
+            df = dfetcher.load_ohlcv_from_db(symbol, 'spot')
             if df.empty:
-                logger.log_to_db('WARNING', 'main', f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
+                dfetcher.log_to_db('WARNING', 'main', f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue
-            logger.log_to_db('INFO', 'main', f"[SPOT] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
+            dfetcher.save_log('INFO', 'main', f"[SPOT] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
             df = spot_strategy.get_signals_and_reasons(df)
             candle_time = df['timestamp'].iloc[-1]
             if last_candle_time_spot is None or candle_time > last_candle_time_spot:
@@ -125,16 +135,16 @@ def handle_spot_trades():
                         'df': df
                     })
         except Exception as e:
-            logger.log_to_db('ERROR', 'main', f"[SPOT] Fehler beim Laden der OHLCV-Daten für {symbol}: {e}")
+            dfetcher.save_log('ERROR', 'main', f"[SPOT] Fehler beim Laden der OHLCV-Daten für {symbol}: {e}")
     if open_trade_spot is not None:
         symbol = open_trade_spot['symbol']
         trader = spot_traders[symbol]
         df = open_trade_spot['df']
         exit_type = trader.monitor_trade(open_trade_spot['signal'], df, spot_strategy)
         if exit_type:
-            logger.log_to_db('INFO', 'main', f"[MAIN] Spot-Trade für {symbol} geschlossen: {exit_type}")
+            dfetcher.save_log('INFO', 'main', f"[MAIN] Spot-Trade für {symbol} geschlossen: {exit_type}")
             trader.send_telegram(f"Spot-Trade für {symbol} geschlossen: {exit_type}")
-            logger.log_trade(
+            dfetcher.save_trade_to_db(
                 symbol=symbol,
                 entry=open_trade_spot['signal'].entry,
                 exit=df['close'].iloc[-1] if 'close' in df.columns else None,
@@ -155,11 +165,11 @@ def handle_spot_trades():
             df = best['df']
             try:
                 result = trader.execute_trade(signal)
-                logger.log_to_db('INFO', 'main', f"[MAIN] Spot-Trade ausgeführt für {symbol}: {result}")
+                dfetcher.save_log('INFO', 'main', f"[MAIN] Spot-Trade ausgeführt für {symbol}: {result}")
                 if result:
                     trader.send_telegram(f"Spot-Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
                     signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
-                    logger.log_trade(
+                    dfetcher.save_trade_to_db(
                         symbol=symbol,
                         entry=signal.entry,
                         exit=None,
@@ -172,18 +182,18 @@ def handle_spot_trades():
                     )
                     open_trade_spot = best
             except Exception as e:
-                logger.log_to_db('ERROR', 'main', f"Fehler beim Ausführen des Spot-Trades für {symbol}: {e}")
+                dfetcher.save_log('ERROR', 'main', f"Fehler beim Ausführen des Spot-Trades für {symbol}: {e}")
 
 def handle_futures_trades():
     global last_candle_time_futures, open_trade_futures
     candidate_futures = []
     for symbol in futures_symbols:
         try:
-            df = futures_datafetcher.load_ohlcv_from_file(symbol, 'futures')
+            df = dfetcher.load_ohlcv_from_db(symbol, 'futures')
             if df.empty:
-                logger.log_to_db('WARNING', 'main', f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
+                dfetcher.save_log('WARNING', 'main', f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue
-            logger.log_to_db('INFO', 'main', f"[FUTURES] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
+            dfetcher.save_log('INFO', 'main', f"[FUTURES] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
             df = futures_strategy.get_signals_and_reasons(df)
             candle_time = df['timestamp'].iloc[-1]
             if last_candle_time_futures is None or candle_time > last_candle_time_futures:
@@ -199,16 +209,16 @@ def handle_futures_trades():
                         'df': df
                     })
         except Exception as e:
-            logger.log_to_db('ERROR', 'main', f"[FUTURES] Fehler beim Laden der OHLCV-Daten für {symbol}: {e}")
+            dfetcher.save_log('ERROR', 'main', f"[FUTURES] Fehler beim Laden der OHLCV-Daten für {symbol}: {e}")
     if open_trade_futures is not None:
         symbol = open_trade_futures['symbol']
         trader = futures_traders[symbol]
         df = open_trade_futures['df']
         exit_type = trader.monitor_trade(open_trade_futures['signal'], df, futures_strategy)
         if exit_type:
-            logger.log_to_db('INFO', 'main', f"[MAIN] Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
+            dfetcher.save_log('INFO', 'main', f"[MAIN] Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
             trader.send_telegram(f"Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
-            logger.log_trade(
+            dfetcher.save_trade_to_db(
                 symbol=symbol,
                 entry=open_trade_futures['signal'].entry,
                 exit=df['close'].iloc[-1] if 'close' in df.columns else None,
@@ -229,11 +239,11 @@ def handle_futures_trades():
             df = best['df']
             try:
                 result = trader.execute_trade(signal)
-                logger.log_to_db('INFO', 'main', f"[MAIN] Futures-Short-Trade ausgeführt für {symbol}: {result}")
+                dfetcher.save_log('INFO', 'main', f"[MAIN] Futures-Short-Trade ausgeführt für {symbol}: {result}")
                 if result:
                     trader.send_telegram(f"Futures-Short-Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
                     signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
-                    logger.log_trade(
+                    dfetcher.save_trade_to_db(
                         symbol=symbol,
                         entry=signal.entry,
                         exit=None,
@@ -246,24 +256,18 @@ def handle_futures_trades():
                     )
                     open_trade_futures = best
             except Exception as e:
-                logger.log_to_db('ERROR', 'main', f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}")
-
-# --- Globale Variablen für offene Trades und letzte Candle ---
-open_trade_spot = None
-open_trade_futures = None
-last_candle_time_spot = None
-last_candle_time_futures = None
+                dfetcher.save_log('ERROR', 'main', f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}")
 
 while True:
     try:
         # OHLCV-Daten für alle Symbole vor jedem Loop aktualisieren
-        spot_datafetcher.fetch_and_save_ohlcv_for_symbols(spot_symbols, market_type='spot', limit=50)
-        futures_datafetcher.fetch_and_save_ohlcv_for_symbols(futures_symbols, market_type='futures', limit=50)
+        dfetcher.fetch_and_save_ohlcv_for_symbols(spot_symbols, market_type='spot', limit=50)
+        dfetcher.fetch_and_save_ohlcv_for_symbols(futures_symbols, market_type='futures', limit=50)
 
         handle_spot_trades()
         handle_futures_trades()
         time.sleep(30)
     except Exception as e:
-        logger.log_to_db('ERROR', 'main', f"Error: {e}")
+        dfetcher.save_log('ERROR', 'main', f"Error: {e}")
         time.sleep(30)
 

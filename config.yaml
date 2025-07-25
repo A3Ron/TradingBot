@@ -1,21 +1,14 @@
-binance:
-  api_key: ${BINANCE_API_KEY}
-  api_secret: ${BINANCE_API_SECRET}
 execution:
   max_trades_per_day: 10
   mode: live
 logging:
   enabled: true
-  path: logs/trades.csv
 postgres:
   host: localhost
   port: 5432
   database: tradingbot
   user: postgres
-  password: postgres
-telegram:
-  chat_id: ${TELEGRAM_CHAT_ID}
-  token: ${TELEGRAM_TOKEN}
+  password: ${POSTGRES_PASSWORD}
 trading:
   futures: true
   futures_symbols:
