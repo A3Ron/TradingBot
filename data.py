@@ -148,39 +148,7 @@ class DataFetcher:
         finally:
             session.close()
 
-    def save_ohlcv_to_db(self, df, symbol, market_type='spot'):
-        """Speichert OHLCV-Daten in PostgreSQL (ersetzt/fügt ein)."""
-        if df.empty:
-            return
-        session = self.get_session()
-        try:
-            for _, row in df.iterrows():
-                exists = session.execute(
-                    sqlalchemy.text("""
-                        SELECT id FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type AND timestamp=:timestamp
-                    """),
-                    dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'])
-                ).first()
-                if exists:
-                    session.execute(sqlalchemy.text("""
-                        UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume, signal=:signal, signal_reason=:signal_reason
-                        WHERE id=:id
-                    """),
-                        dict(id=exists.id, open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'], signal=bool(row.get('signal', False)), signal_reason=str(row.get('signal_reason', '')))
-                    )
-                else:
-                    session.execute(sqlalchemy.text("""
-                        INSERT INTO ohlcv (symbol, market_type, timestamp, open, high, low, close, volume, signal, signal_reason)
-                        VALUES (:symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume, :signal, :signal_reason)
-                    """),
-                        dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'], open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'], signal=bool(row.get('signal', False)), signal_reason=str(row.get('signal_reason', '')))
-                    )
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            self.save_log('ERROR', 'data', f"OHLCV DB-Save fehlgeschlagen: {e}")
-        finally:
-            session.close()
+
 
     def load_ohlcv_from_db(self, symbol, market_type, limit=500):
         """Lädt OHLCV-Daten aus PostgreSQL."""
@@ -280,8 +248,10 @@ class DataFetcher:
         return {'assets': assets, 'total_value': total_value, 'prices': prices}
     
     def save_ohlcv(self, df, symbol, market_type='spot'):
-        """Speichert OHLCV-Daten in DB (und optional als CSV)."""
-        # Signale und Gründe berechnen
+        """Berechnet Signale und speichert OHLCV-Daten in PostgreSQL (ersetzt/fügt ein)."""
+        if df.empty:
+            return
+        # Signale und Gründe werden IMMER vor dem Speichern berechnet
         try:
             strategies = get_strategy(self.config)
             strat = strategies['spot_long'] if market_type == 'spot' else strategies['futures_short']
@@ -293,8 +263,35 @@ class DataFetcher:
                 df['signal'] = False
             if 'signal_reason' not in df.columns:
                 df['signal_reason'] = ''
-        # In DB speichern
-        self.save_ohlcv_to_db(df, symbol, market_type)
+        session = self.get_session()
+        try:
+            for _, row in df.iterrows():
+                exists = session.execute(
+                    sqlalchemy.text("""
+                        SELECT id FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type AND timestamp=:timestamp
+                    """),
+                    dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'])
+                ).first()
+                if exists:
+                    session.execute(sqlalchemy.text("""
+                        UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume, signal=:signal, signal_reason=:signal_reason
+                        WHERE id=:id
+                    """),
+                        dict(id=exists.id, open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'], signal=bool(row.get('signal', False)), signal_reason=str(row.get('signal_reason', '')))
+                    )
+                else:
+                    session.execute(sqlalchemy.text("""
+                        INSERT INTO ohlcv (symbol, market_type, timestamp, open, high, low, close, volume, signal, signal_reason)
+                        VALUES (:symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume, :signal, :signal_reason)
+                    """),
+                        dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'], open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'], signal=bool(row.get('signal', False)), signal_reason=str(row.get('signal_reason', '')))
+                    )
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            self.save_log('ERROR', 'data', f"OHLCV DB-Save fehlgeschlagen: {e}")
+        finally:
+            session.close()
 
     def get_futures_symbols(self):
         import requests
@@ -363,7 +360,7 @@ class DataFetcher:
                 self.timeframe = timeframe
                 df = self.fetch_ohlcv(limit=limit)
                 if not df.empty:
-                    self.save_ohlcv_to_db(df, symbol, market_type)
+                    self.save_ohlcv(df, symbol, market_type)
                     self.save_log('INFO', 'DataFetcher.fetch_and_save_ohlcv_for_symbols', f"OHLCV für {symbol} ({market_type}) gespeichert. Zeilen: {len(df)}")
                 else:
                     self.save_log('WARNING', 'DataFetcher.fetch_and_save_ohlcv_for_symbols', f"Keine OHLCV-Daten für {symbol} ({market_type}) geladen.")
