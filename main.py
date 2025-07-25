@@ -71,29 +71,48 @@ def resolve_env_vars(obj):
         return obj
 
 load_dotenv()
-with open(CONFIG_PATH) as f:
-    config = yaml.safe_load(f)
-config = resolve_env_vars(config)
+
+dfetcher = None
+dfetcher_log = lambda *a, **kw: None
+try:
+    with open(CONFIG_PATH) as f:
+        config = yaml.safe_load(f)
+    config = resolve_env_vars(config)
+    dfetcher = DataFetcher(config)
+    dfetcher_log = dfetcher.save_log
+    dfetcher_log('INFO', 'main', 'Config und DataFetcher erfolgreich geladen.')
+except Exception as e:
+    print(f"[FATAL] Fehler beim Laden der Config oder DataFetcher: {e}")
+    if dfetcher:
+        dfetcher.save_log('ERROR', 'main', f'Fehler beim Laden der Config/DataFetcher: {e}')
+    raise
 
 
 # Symbollisten für Spot (Long) und Futures (Short) aus Config
 spot_symbols = config['trading'].get('symbols', [])
+dfetcher_log('INFO', 'main', f"Spot-Symbole: {spot_symbols}")
 futures_symbols = config['trading'].get('futures_symbols', [])
+dfetcher_log('INFO', 'main', f"Futures-Symbole: {futures_symbols}")
 
 # Strategie-Instanzen für beide Typen
 from strategy import get_strategy
 strategies = get_strategy(config)
+dfetcher_log('INFO', 'main', f"Strategien geladen: {list(strategies.keys())}")
 spot_strategy = strategies['spot_long']
 futures_strategy = strategies['futures_short']
 
 # Trader-Instanzen pro Symbol und Typ
 spot_traders = {symbol: SpotLongTrader(config, symbol) for symbol in spot_symbols}
+
+dfetcher_log('INFO', 'main', f"Spot-Trader Instanzen: {list(spot_traders.keys())}")
 futures_traders = {symbol: FuturesShortTrader(config, symbol) for symbol in futures_symbols}
+dfetcher_log('INFO', 'main', f"Futures-Trader Instanzen: {list(futures_traders.keys())}")
 
 dfetcher = DataFetcher(config)
 
 # Sende Startnachricht mit wichtigsten Infos (nur einmal)
 startup_msg = format_startup_message(config)
+dfetcher_log('INFO', 'main', 'Startup-Message wird gesendet.')
 if spot_traders:
     # Sende über den ersten Spot-Trader, falls vorhanden
     list(spot_traders.values())[0].send_telegram(startup_msg)
@@ -110,18 +129,20 @@ def handle_spot_trades():
     global last_candle_time_spot, open_trade_spot
     candidate_spot = []
     for symbol in spot_symbols:
+        dfetcher_log('DEBUG', 'main', f"[SPOT] Prüfe Symbol: {symbol}")
         try:
             df = dfetcher.load_ohlcv_from_db(symbol, 'spot')
             if df.empty:
-                dfetcher.save_log('WARNING', 'main', f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
+                dfetcher_log('WARNING', 'main', f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue
-            dfetcher.save_log('INFO', 'main', f"[SPOT] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
+            dfetcher_log('DEBUG', 'main', f"[SPOT] OHLCV-Daten für {symbol} geladen. Zeilen: {len(df)}")
             df = spot_strategy.get_signals_and_reasons(df)
             candle_time = df['timestamp'].iloc[-1]
             if last_candle_time_spot is None or candle_time > last_candle_time_spot:
                 last_candle_time_spot = candle_time
                 last_signal = spot_strategy.check_signal(df)
                 if last_signal:
+                    dfetcher_log('INFO', 'main', f"[SPOT] Signal erkannt für {symbol}: Entry={last_signal.entry} SL={last_signal.stop_loss} TP={last_signal.take_profit} Vol={last_signal.volume}")
                     vol_mean = df['volume'].iloc[-20:-1].mean() if len(df) > 20 else df['volume'].mean()
                     vol_score = last_signal.volume / vol_mean if vol_mean else 0
                     candidate_spot.append({
@@ -130,17 +151,24 @@ def handle_spot_trades():
                         'vol_score': vol_score,
                         'df': df
                     })
+                else:
+                    dfetcher_log('DEBUG', 'main', f"[SPOT] Kein Signal für {symbol} in aktueller Kerze.")
+            else:
+                dfetcher_log('DEBUG', 'main', f"[SPOT] Keine neue Kerze für {symbol}.")
         except Exception as e:
-            dfetcher.save_log('ERROR', 'main', f"[SPOT] Fehler beim Laden der OHLCV-Daten für {symbol}: {e}")
+            dfetcher_log('ERROR', 'main', f"[SPOT] Fehler beim Laden/Verarbeiten der OHLCV-Daten für {symbol}: {e}")
     if open_trade_spot is not None:
         symbol = open_trade_spot['symbol']
         trader = spot_traders[symbol]
         df = open_trade_spot['df']
+        dfetcher_log('DEBUG', 'main', f"[SPOT] Überwache offenen Trade für {symbol}.")
         exit_type = trader.monitor_trade(open_trade_spot['signal'], df, spot_strategy)
         if exit_type:
-            dfetcher.save_log('INFO', 'main', f"[MAIN] Spot-Trade für {symbol} geschlossen: {exit_type}")
+            dfetcher_log('INFO', 'main', f"[MAIN] Spot-Trade für {symbol} geschlossen: {exit_type}")
             trader.send_telegram(f"Spot-Trade für {symbol} geschlossen: {exit_type}")
             open_trade_spot = None
+        else:
+            dfetcher_log('DEBUG', 'main', f"[SPOT] Trade für {symbol} bleibt offen.")
     else:
         if candidate_spot:
             best = max(candidate_spot, key=lambda x: x['vol_score'])
@@ -148,31 +176,38 @@ def handle_spot_trades():
             trader = spot_traders[symbol]
             signal = best['signal']
             df = best['df']
+            dfetcher_log('INFO', 'main', f"[SPOT] Führe Trade aus für {symbol} mit Vol-Score {best['vol_score']}")
             try:
                 result = trader.execute_trade(signal)
-                dfetcher.save_log('INFO', 'main', f"[MAIN] Spot-Trade ausgeführt für {symbol}: {result}")
+                dfetcher_log('INFO', 'main', f"[MAIN] Spot-Trade ausgeführt für {symbol}: {result}")
                 if result:
                     trader.send_telegram(f"Spot-Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
                     open_trade_spot = best
+                else:
+                    dfetcher_log('WARNING', 'main', f"[SPOT] Trade für {symbol} wurde nicht ausgeführt (execute_trade lieferte None).")
             except Exception as e:
-                dfetcher.save_log('ERROR', 'main', f"Fehler beim Ausführen des Spot-Trades für {symbol}: {e}")
+                dfetcher_log('ERROR', 'main', f"Fehler beim Ausführen des Spot-Trades für {symbol}: {e}")
+        else:
+            dfetcher_log('DEBUG', 'main', f"[SPOT] Kein Kandidat für neuen Trade gefunden.")
 
 def handle_futures_trades():
     global last_candle_time_futures, open_trade_futures
     candidate_futures = []
     for symbol in futures_symbols:
+        dfetcher_log('DEBUG', 'main', f"[FUTURES] Prüfe Symbol: {symbol}")
         try:
             df = dfetcher.load_ohlcv_from_db(symbol, 'futures')
             if df.empty:
-                dfetcher.save_log('WARNING', 'main', f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
+                dfetcher_log('WARNING', 'main', f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue
-            dfetcher.save_log('INFO', 'main', f"[FUTURES] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
+            dfetcher_log('DEBUG', 'main', f"[FUTURES] OHLCV-Daten für {symbol} geladen. Zeilen: {len(df)}")
             df = futures_strategy.get_signals_and_reasons(df)
             candle_time = df['timestamp'].iloc[-1]
             if last_candle_time_futures is None or candle_time > last_candle_time_futures:
                 last_candle_time_futures = candle_time
                 last_signal = futures_strategy.check_signal(df)
                 if last_signal:
+                    dfetcher_log('INFO', 'main', f"[FUTURES] Signal erkannt für {symbol}: Entry={last_signal.entry} SL={last_signal.stop_loss} TP={last_signal.take_profit} Vol={last_signal.volume}")
                     vol_mean = df['volume'].iloc[-20:-1].mean() if len(df) > 20 else df['volume'].mean()
                     vol_score = last_signal.volume / vol_mean if vol_mean else 0
                     candidate_futures.append({
@@ -181,17 +216,24 @@ def handle_futures_trades():
                         'vol_score': vol_score,
                         'df': df
                     })
+                else:
+                    dfetcher_log('DEBUG', 'main', f"[FUTURES] Kein Signal für {symbol} in aktueller Kerze.")
+            else:
+                dfetcher_log('DEBUG', 'main', f"[FUTURES] Keine neue Kerze für {symbol}.")
         except Exception as e:
-            dfetcher.save_log('ERROR', 'main', f"[FUTURES] Fehler beim Laden der OHLCV-Daten für {symbol}: {e}")
+            dfetcher_log('ERROR', 'main', f"[FUTURES] Fehler beim Laden/Verarbeiten der OHLCV-Daten für {symbol}: {e}")
     if open_trade_futures is not None:
         symbol = open_trade_futures['symbol']
         trader = futures_traders[symbol]
         df = open_trade_futures['df']
+        dfetcher_log('DEBUG', 'main', f"[FUTURES] Überwache offenen Trade für {symbol}.")
         exit_type = trader.monitor_trade(open_trade_futures['signal'], df, futures_strategy)
         if exit_type:
-            dfetcher.save_log('INFO', 'main', f"[MAIN] Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
+            dfetcher_log('INFO', 'main', f"[MAIN] Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
             trader.send_telegram(f"Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
             open_trade_futures = None
+        else:
+            dfetcher_log('DEBUG', 'main', f"[FUTURES] Trade für {symbol} bleibt offen.")
     else:
         if candidate_futures:
             best = max(candidate_futures, key=lambda x: x['vol_score'])
@@ -199,25 +241,38 @@ def handle_futures_trades():
             trader = futures_traders[symbol]
             signal = best['signal']
             df = best['df']
+            dfetcher_log('INFO', 'main', f"[FUTURES] Führe Trade aus für {symbol} mit Vol-Score {best['vol_score']}")
             try:
                 result = trader.execute_trade(signal)
-                dfetcher.save_log('INFO', 'main', f"[MAIN] Futures-Short-Trade ausgeführt für {symbol}: {result}")
+                dfetcher_log('INFO', 'main', f"[MAIN] Futures-Short-Trade ausgeführt für {symbol}: {result}")
                 if result:
                     trader.send_telegram(f"Futures-Short-Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
                     open_trade_futures = best
+                else:
+                    dfetcher_log('WARNING', 'main', f"[FUTURES] Trade für {symbol} wurde nicht ausgeführt (execute_trade lieferte None).")
             except Exception as e:
-                dfetcher.save_log('ERROR', 'main', f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}")
+                dfetcher_log('ERROR', 'main', f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}")
+        else:
+            dfetcher_log('DEBUG', 'main', f"[FUTURES] Kein Kandidat für neuen Trade gefunden.")
 
 while True:
     try:
+        dfetcher_log('DEBUG', 'main', '--- Starte neuen Loop ---')
         # OHLCV-Daten für alle Symbole vor jedem Loop aktualisieren
+        dfetcher_log('DEBUG', 'main', 'Aktualisiere Spot-OHLCV-Daten...')
         dfetcher.fetch_and_save_ohlcv_for_symbols(spot_symbols, market_type='spot', limit=50)
+        dfetcher_log('DEBUG', 'main', 'Aktualisiere Futures-OHLCV-Daten...')
         dfetcher.fetch_and_save_ohlcv_for_symbols(futures_symbols, market_type='futures', limit=50)
 
+        dfetcher_log('DEBUG', 'main', 'Bearbeite Spot-Trades...')
         handle_spot_trades()
+        dfetcher_log('DEBUG', 'main', 'Bearbeite Futures-Trades...')
         handle_futures_trades()
+        dfetcher_log('DEBUG', 'main', 'Loop fertig, warte 30 Sekunden.')
         time.sleep(30)
     except Exception as e:
-        dfetcher.save_log('ERROR', 'main', f"Error: {e}")
+        if dfetcher:
+            dfetcher.save_log('ERROR', 'main', f"Error: {e}")
+        print(f"[ERROR] {e}")
         time.sleep(30)
 
