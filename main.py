@@ -140,17 +140,6 @@ def handle_spot_trades():
         if exit_type:
             dfetcher.save_log('INFO', 'main', f"[MAIN] Spot-Trade für {symbol} geschlossen: {exit_type}")
             trader.send_telegram(f"Spot-Trade für {symbol} geschlossen: {exit_type}")
-            dfetcher.save_trade_to_db(
-                symbol=symbol,
-                entry=open_trade_spot['signal'].entry,
-                exit=df['close'].iloc[-1] if 'close' in df.columns else None,
-                stop_loss=open_trade_spot['signal'].stop_loss,
-                take_profit=open_trade_spot['signal'].take_profit,
-                volume=open_trade_spot['signal'].volume,
-                outcome='closed',
-                exit_type=exit_type,
-                signal_reason=None
-            )
             open_trade_spot = None
     else:
         if candidate_spot:
@@ -164,18 +153,6 @@ def handle_spot_trades():
                 dfetcher.save_log('INFO', 'main', f"[MAIN] Spot-Trade ausgeführt für {symbol}: {result}")
                 if result:
                     trader.send_telegram(f"Spot-Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
-                    signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
-                    dfetcher.save_trade_to_db(
-                        symbol=symbol,
-                        entry=signal.entry,
-                        exit=None,
-                        stop_loss=signal.stop_loss,
-                        take_profit=signal.take_profit,
-                        volume=signal.volume,
-                        outcome='open',
-                        exit_type=None,
-                        signal_reason=signal_reason
-                    )
                     open_trade_spot = best
             except Exception as e:
                 dfetcher.save_log('ERROR', 'main', f"Fehler beim Ausführen des Spot-Trades für {symbol}: {e}")
@@ -214,17 +191,6 @@ def handle_futures_trades():
         if exit_type:
             dfetcher.save_log('INFO', 'main', f"[MAIN] Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
             trader.send_telegram(f"Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
-            dfetcher.save_trade_to_db(
-                symbol=symbol,
-                entry=open_trade_futures['signal'].entry,
-                exit=df['close'].iloc[-1] if 'close' in df.columns else None,
-                stop_loss=open_trade_futures['signal'].stop_loss,
-                take_profit=open_trade_futures['signal'].take_profit,
-                volume=open_trade_futures['signal'].volume,
-                outcome='closed',
-                exit_type=exit_type,
-                signal_reason=None
-            )
             open_trade_futures = None
     else:
         if candidate_futures:
@@ -238,18 +204,6 @@ def handle_futures_trades():
                 dfetcher.save_log('INFO', 'main', f"[MAIN] Futures-Short-Trade ausgeführt für {symbol}: {result}")
                 if result:
                     trader.send_telegram(f"Futures-Short-Trade ausgeführt für {symbol} Entry: {signal.entry} SL: {signal.stop_loss} TP: {signal.take_profit} Vol: {signal.volume}")
-                    signal_reason = df['signal_reason'].iloc[-1] if 'signal_reason' in df.columns else None
-                    dfetcher.save_trade_to_db(
-                        symbol=symbol,
-                        entry=signal.entry,
-                        exit=None,
-                        stop_loss=signal.stop_loss,
-                        take_profit=signal.take_profit,
-                        volume=signal.volume,
-                        outcome='open',
-                        exit_type=None,
-                        signal_reason=signal_reason
-                    )
                     open_trade_futures = best
             except Exception as e:
                 dfetcher.save_log('ERROR', 'main', f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}")
