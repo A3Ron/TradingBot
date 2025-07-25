@@ -62,6 +62,8 @@ def create_tables(engine):
 create_tables(pg_engine)
 
 class DataFetcher:
+    def __init__(self, config=None):
+        self.config = config
     def get_spot_symbols(self):
         """Lädt alle handelbaren Spot-Symbole von Binance."""
         import requests
@@ -200,7 +202,7 @@ class DataFetcher:
         finally:
             session.close()
 
-    def load_logs_from_db(self, level=None, limit=100):
+    def load_logs(self, level=None, limit=100):
         """Lädt Logs aus der Datenbank (optional gefiltert)."""
         session = self.get_session()
         try:
@@ -220,60 +222,18 @@ class DataFetcher:
         finally:
             session.close()
 
-    def archive_ohlcv(self, symbol, market_type='spot', keep_days=2):
-        """Archiviert ältere OHLCV-Daten monatlich und hält nur die letzten keep_days im Arbeitsfile."""
-        filename = self.get_ohlcv_filename(symbol, market_type)
-        if not os.path.exists(filename):
-            self.save_log('ERROR', 'data', f"Logs DB-Load fehlgeschlagen: Datei {filename} nicht gefunden.")
-            return
-        df = pd.read_csv(filename, parse_dates=['timestamp'])
-        if df.empty:
-            return
-        # Stelle sicher, dass timestamp als datetime64[ns] vorliegt
-        if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
-            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-        # Trenne in zu archivierende und zu behaltende Daten
-        # Stelle sicher, dass sowohl cutoff als auch df['timestamp'] tz-naiv (UTC) sind
-        if df['timestamp'].dt.tz is not None:
-            df['timestamp'] = df['timestamp'].dt.tz_convert('UTC').dt.tz_localize(None)
-        cutoff = pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=keep_days)
-        to_archive = df[df['timestamp'] < cutoff]
-        to_keep = df[df['timestamp'] >= cutoff]
-        if not to_archive.empty:
-            # Archivverzeichnis anlegen
-            archive_dir = f"logs/archive"
-            Path(archive_dir).mkdir(parents=True, exist_ok=True)
-            # Archivdateiname: z.B. logs/archive/ohlcv_ETHUSDT_2025-07.csv
-            for month, group in to_archive.groupby(to_archive['timestamp'].dt.to_period('M')):
-                month_str = month.strftime('%Y-%m')
-                base = symbol.replace('/', '')
-                archive_file = f"{archive_dir}/ohlcv_{base}_{month_str}{'_futures' if market_type=='futures' else ''}.csv"
-                # Schreibe oder hänge an Archivfile
-                if os.path.exists(archive_file):
-                    group.to_csv(archive_file, mode='a', header=False, index=False, encoding='utf-8')
-                else:
-                    group.to_csv(archive_file, mode='w', header=True, index=False, encoding='utf-8')
-            # Arbeitsfile überschreiben mit den zu behaltenden Daten
-            to_keep.to_csv(filename, index=False, encoding='utf-8')
-            self.save_log('INFO', 'data', f"OHLCV für {symbol} ({market_type}) archiviert bis {cutoff.date()} und Rolling-Window aktualisiert.")
-        # If nothing to archive, just log debug
-        self.save_log('DEBUG', 'data', f"Keine OHLCV-Daten für {symbol} ({market_type}) zu archivieren.")
-
-
     def fetch_portfolio(self):
         """Holt Spot- und Futures-Portfolio getrennt und gibt beide plus das Total zurück."""
         results = {}
         # Spot
         try:
-            self._init_exchange(market_type='spot')
-            spot = self._fetch_single_portfolio()
+            spot = self._fetch_single_portfolio(market_type='spot')
         except Exception as e:
             self.save_log('ERROR', 'DataFetcher.fetch_portfolio', f"Spot-Portfolio konnte nicht geladen werden: {e}")
             spot = {'assets': [], 'total_value': 0.0, 'prices': {}}
         # Futures
         try:
-            self._init_exchange(market_type='futures')
-            futures = self._fetch_single_portfolio()
+            futures = self._fetch_single_portfolio(market_type='futures')
         except Exception as e:
             self.save_log('ERROR', 'DataFetcher.fetch_portfolio', f"Futures-Portfolio konnte nicht geladen werden: {e}")
             futures = {'assets': [], 'total_value': 0.0, 'prices': {}}
@@ -283,15 +243,18 @@ class DataFetcher:
         results['total_value'] = total_value
         return results
 
-    def _fetch_single_portfolio(self):
+    def _fetch_single_portfolio(self, market_type='spot'):
+        # Initialisiere Exchange, falls nicht vorhanden
+        if not hasattr(self, 'exchange') or self.exchange is None:
+            self._init_exchange(market_type=market_type)
         try:
             balances = self.exchange.fetch_balance()
         except Exception as api_ex:
-            self.save_log('ERROR', 'data', f"fetch_balance API-Fehler: {api_ex}")
+            self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"fetch_balance API-Fehler: {api_ex}")
             return {'assets': [], 'total_value': 0.0, 'prices': {}}
         assets, total_value, prices = [], 0.0, {}
         if not balances or 'total' not in balances or not isinstance(balances['total'], dict):
-            self.save_log('ERROR', 'data', f"'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
+            self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
             return {'assets': [], 'total_value': 0.0, 'prices': {}}
         for asset, info in balances['total'].items():
             if not info:
@@ -304,10 +267,10 @@ class DataFetcher:
                     ticker = self.exchange.fetch_ticker(symbol)
                     price = ticker.get('last') or ticker.get('close') or 0.0
                     if price is None:
-                        self.save_log('WARNING', 'data', f"Kein Preis für {symbol} gefunden: {ticker}")
+                        self.save_log('WARNING', 'DataFetcher._fetch_single_portfolio', f"Kein Preis für {symbol} gefunden: {ticker}")
                         price = 0.0
                 except Exception as ex:
-                    self.save_log('ERROR', 'data', f"Ticker-Fehler für {symbol}: {ex}")
+                    self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"Ticker-Fehler für {symbol}: {ex}")
                     price = None
             value = info * price if price is not None else None
             if price is not None:
@@ -353,15 +316,18 @@ class DataFetcher:
             self.save_log('ERROR', 'data', f"Futures-Symbole konnten nicht geladen werden: {e}")
             return []
 
-    def _init_exchange(self):
-        mode = self.config['execution']['mode']
-        is_futures = self.config.get('trading', {}).get('futures', False)
+    def _init_exchange(self, market_type='spot'):
+        """Initialisiert self.exchange für Spot oder Futures."""
+        mode = os.environ.get('MODE', 'live')
+        if market_type == 'futures':
+            options = {'defaultType': 'future', 'contractType': 'PERPETUAL'}
+        else:
+            options = {'defaultType': 'spot'}
         if mode == 'testnet':
             api_key = os.getenv('BINANCE_API_KEY_TEST')
             api_secret = os.getenv('BINANCE_API_SECRET_TEST')
-            self.save_log('INFO', 'data', 'Fetching OHLCV from Binance Spot Testnet via HTTP')
             urls = None
-            if not is_futures:
+            if market_type == 'spot':
                 urls = {
                     'api': {
                         'public': 'https://testnet.binance.vision/api',
@@ -377,51 +343,32 @@ class DataFetcher:
             self.exchange.set_sandbox_mode(True)
         else:
             api_key = os.getenv('BINANCE_API_KEY')
-                # Error logging only valid in except block where 'e' is defined
-            options = {'defaultType': 'future', 'contractType': 'PERPETUAL'} if is_futures else {'defaultType': 'spot'}
+            api_secret = os.getenv('BINANCE_API_SECRET')
             self.exchange = ccxt.binance({
                 'apiKey': api_key,
                 'secret': api_secret,
                 'enableRateLimit': True,
                 'options': options,
             })
-
-    def fetch_portfolio(self):
-        try:
+    def fetch_and_save_ohlcv_for_symbols(self, symbols, market_type='spot', limit=50):
+        """Lädt und speichert OHLCV-Daten für eine Liste von Symbolen."""
+        # Use timeframe from config if available, else fallback to '5m'
+        timeframe = '5m'
+        if self.config and 'trading' in self.config and 'timeframe' in self.config['trading']:
+            timeframe = self.config['trading']['timeframe']
+        for symbol in symbols:
             try:
-                balances = self.exchange.fetch_balance()
-            except Exception as api_ex:
-                self.save_log('ERROR', 'data', f"fetch_balance API-Fehler: {api_ex}")
-                return {'assets': [], 'total_value': 0.0, 'prices': {}}
-            assets, total_value, prices = [], 0.0, {}
-            if not balances or 'total' not in balances or not isinstance(balances['total'], dict):
-                self.save_log('ERROR', 'data', f"'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
-                return {'assets': [], 'total_value': 0.0, 'prices': {}}
-            for asset, info in balances['total'].items():
-                if not info:
-                    continue
-                if asset.upper() in ["USDT", "BUSD", "USDC"]:
-                    price = 1.0
+                self._init_exchange(market_type=market_type)
+                self.symbol = symbol
+                self.timeframe = timeframe
+                df = self.fetch_ohlcv(limit=limit)
+                if not df.empty:
+                    self.save_ohlcv_to_db(df, symbol, market_type)
+                    self.save_log('INFO', 'DataFetcher.fetch_and_save_ohlcv_for_symbols', f"OHLCV für {symbol} ({market_type}) gespeichert. Zeilen: {len(df)}")
                 else:
-                    symbol = asset + '/USDT'
-                    try:
-                        ticker = self.exchange.fetch_ticker(symbol)
-                        price = ticker.get('last') or ticker.get('close') or 0.0
-                        if price is None:
-                            self.save_log('WARNING', 'data', f"Kein Preis für {symbol} gefunden: {ticker}")
-                            price = 0.0
-                    except Exception as ex:
-                        self.save_log('ERROR', 'data', f"Ticker-Fehler für {symbol}: {ex}")
-                        price = None
-                value = info * price if price is not None else None
-                if price is not None:
-                    prices[asset] = price
-                    total_value += value
-                assets.append({'asset': asset, 'amount': info, 'price': price, 'value': value})
-            return {'assets': assets, 'total_value': total_value, 'prices': prices}
-        except Exception as e:
-            self.save_log('ERROR', 'data', f"Portfolio fetch failed: {e}")
-            return {'assets': [], 'total_value': 0.0, 'prices': {}}
+                    self.save_log('WARNING', 'DataFetcher.fetch_and_save_ohlcv_for_symbols', f"Keine OHLCV-Daten für {symbol} ({market_type}) geladen.")
+            except Exception as e:
+                self.save_log('ERROR', 'DataFetcher.fetch_and_save_ohlcv_for_symbols', f"Fehler beim Laden/Speichern von OHLCV für {symbol} ({market_type}): {e}")
 
     def fetch_ohlcv(self, limit=50):
         """Lädt OHLCV-Daten für das aktuelle Symbol/Timeframe."""

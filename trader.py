@@ -10,7 +10,7 @@ class BaseTrader:
         self.mode = config['execution']['mode']
         self.telegram_token = os.environ.get('TELEGRAM_TOKEN', '')
         self.telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
-        self.data = DataFetcher()
+        self.data = DataFetcher(self.config)
 
     def close_trade_to_db(self, market_type, side, qty, price, exit_type):
         trade_dict = {

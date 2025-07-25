@@ -90,7 +90,7 @@ futures_strategy = strategies['futures_short']
 spot_traders = {symbol: SpotLongTrader(config, symbol) for symbol in spot_symbols}
 futures_traders = {symbol: FuturesShortTrader(config, symbol) for symbol in futures_symbols}
 
-dfetcher = DataFetcher()
+dfetcher = DataFetcher(config)
 
 # Sende Startnachricht mit wichtigsten Infos (nur einmal)
 startup_msg = format_startup_message(config)
@@ -113,7 +113,7 @@ def handle_spot_trades():
         try:
             df = dfetcher.load_ohlcv_from_db(symbol, 'spot')
             if df.empty:
-                dfetcher.log_to_db('WARNING', 'main', f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
+                dfetcher.save_log('WARNING', 'main', f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue
             dfetcher.save_log('INFO', 'main', f"[SPOT] OHLCV-Daten für {symbol} erfolgreich geladen. Zeilen: {len(df)}")
             df = spot_strategy.get_signals_and_reasons(df)

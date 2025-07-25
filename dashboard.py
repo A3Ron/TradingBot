@@ -95,7 +95,7 @@ config_path = "config.yaml"
 PID_FILE = "bot.pid"
 MAIN_SCRIPT = "main.py"
 config = load_config(config_path)
-dfetcher = DataFetcher()
+dfetcher = DataFetcher(config)
 trade_df = dfetcher.load_trades_from_db(limit=1000)
 
 # --- UI Code ---
@@ -515,25 +515,36 @@ with st.expander("Binance OHLCV Daten", expanded=False):
                     )
                     layers.append(signal_points)
                 # Entry/Exit-Marker aus Trade-Log
-                trade_df_symbol = trade_df[trade_df['symbol'] == selected_symbol]
-                if not trade_df_symbol.empty:
-                    # Entry-Marker (grün)
-                    entry_points = alt.Chart(trade_df_symbol).mark_point(color='green', shape='triangle-up', size=100).encode(
-                        x=alt.X('timestamp:T'),
-                        y=alt.Y('entry_price:Q'),
-                        tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
-                    )
-                    # Exit-Marker (blau)
-                    if 'exit_price' in trade_df_symbol.columns:
-                        exit_points = alt.Chart(trade_df_symbol.dropna(subset=['exit_price'])).mark_point(color='blue', shape='triangle-down', size=100).encode(
+                def normalize_symbol(sym):
+                    # "BTC/USDT" -> "BTCUSDT", "BTCUSDT" bleibt "BTCUSDT"
+                    return sym.replace('/', '').upper() if isinstance(sym, str) else sym
+
+                if 'symbol' in trade_df.columns:
+                    norm_selected = normalize_symbol(selected_symbol)
+                    trade_df['symbol_norm'] = trade_df['symbol'].apply(normalize_symbol)
+                    trade_df_symbol = trade_df[trade_df['symbol_norm'] == norm_selected]
+                    if not trade_df_symbol.empty:
+                        # Entry-Marker (grün)
+                        entry_points = alt.Chart(trade_df_symbol).mark_point(color='green', shape='triangle-up', size=100).encode(
                             x=alt.X('timestamp:T'),
-                            y=alt.Y('exit_price:Q'),
+                            y=alt.Y('entry_price:Q'),
                             tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
                         )
-                        layers.append(entry_points)
-                        layers.append(exit_points)
+                        # Exit-Marker (blau)
+                        if 'exit_price' in trade_df_symbol.columns:
+                            exit_points = alt.Chart(trade_df_symbol.dropna(subset=['exit_price'])).mark_point(color='blue', shape='triangle-down', size=100).encode(
+                                x=alt.X('timestamp:T'),
+                                y=alt.Y('exit_price:Q'),
+                                tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
+                            )
+                            layers.append(entry_points)
+                            layers.append(exit_points)
+                        else:
+                            layers.append(entry_points)
                     else:
-                        layers.append(entry_points)
+                        st.info("Keine Trades für dieses Symbol gefunden.")
+                else:
+                    st.info("Keine Trades mit Spalte 'symbol' vorhanden.")
                 chart = alt.layer(*layers).interactive()
                 st.altair_chart(chart, use_container_width=True)
                 # Volumen als separater interaktiver Chart
