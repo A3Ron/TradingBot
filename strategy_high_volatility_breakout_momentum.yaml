@@ -6,11 +6,11 @@ params:
   take_profit_pct: 0.07 # 7% Take-Profit
   trailing_trigger_pct: 0.05 # Trailing Stop wird bei 5% Gewinn aktiviert
   price_change_pct: 0.02 # 2% Preisänderung für Long-Signal
-  price_change_periods: 12 # 12 Perioden für Preisänderung
+  price_change_periods: 60 # 60 Perioden für Preisänderung
   volume_mult: 1.5 # Multiplikator für Volumen
   rsi_long: 58 # RSI-Schwelle für Long-Einstieg
   rsi_short: 40 # RSI-Schwelle für Short-Einstieg
   rsi_tp_exit: 50 # RSI-Schwelle für Take-Profit-Exit
-  rsi_period: 14 # RSI-Berechnungsperiode
+  rsi_period: 60 # RSI-Berechnungsperiode
   momentum_exit_rsi: 50 # RSI-Schwelle für Momentum-Exit
   trailing_stop_trigger_pct: 0.05  # Bei +5% Gewinn wird Trailing Stop aktiviert

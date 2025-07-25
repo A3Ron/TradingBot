@@ -1,10 +1,7 @@
-
-
 import ccxt
 import pandas as pd
 import os
 import sqlalchemy
-from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, MetaData, Table
 from sqlalchemy.orm import sessionmaker

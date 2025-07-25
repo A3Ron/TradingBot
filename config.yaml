@@ -28,4 +28,4 @@ trading:
   - BTC/USDT
   - SUI/USDT
   - XRP/USDT
-  timeframe: 5m
+  timeframe: 1m
