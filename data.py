@@ -1,30 +1,178 @@
 
+
 import ccxt
+import copy
 import pandas as pd
-import logging
 import os
+import sqlalchemy
 from pathlib import Path
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, MetaData, Table
+from sqlalchemy.orm import sessionmaker
+from strategy import get_strategy
+from logger import Logger
 load_dotenv()
 
-# Logger für Bot-Logdatei (Singleton)
-def get_bot_logger():
-    logger = logging.getLogger("tradingbot")
-    logger.setLevel(logging.DEBUG)
-    logfile = "logs/bot.log"
-    if not any(isinstance(h, logging.FileHandler) and h.baseFilename.endswith(logfile) for h in logger.handlers):
-        logfile_handler = logging.FileHandler(logfile, encoding="utf-8")
-        logfile_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
-        logger.addHandler(logfile_handler)
-    return logger
+logger = Logger()
 
-logger = get_bot_logger()
+# --- PostgreSQL Datenbank Setup ---
+def get_pg_engine():
+    pg_url = os.getenv("PG_URL") or os.getenv("POSTGRES_URL")
+    if not pg_url:
+        # Fallback: Einzelne Variablen
+        user = os.getenv("PG_USER", "postgres")
+        pw = os.getenv("PG_PASSWORD", "postgres")
+        host = os.getenv("PG_HOST", "localhost")
+        port = os.getenv("PG_PORT", "5432")
+        db = os.getenv("PG_DB", "tradingbot")
+        pg_url = f"postgresql+psycopg2://{user}:{pw}@{host}:{port}/{db}"
+    return create_engine(pg_url, echo=False, future=True)
+
+def create_tables(engine):
+    meta = MetaData()
+    # OHLCV Tabelle
+    Table('ohlcv', meta,
+        Column('id', Integer, primary_key=True),
+        Column('symbol', String(32), index=True),
+        Column('market_type', String(16), index=True),
+        Column('timestamp', DateTime, index=True),
+        Column('open', Float),
+        Column('high', Float),
+        Column('low', Float),
+        Column('close', Float),
+        Column('volume', Float),
+        Column('signal', Boolean),
+        Column('signal_reason', Text),
+        sqlalchemy.schema.UniqueConstraint('symbol', 'market_type', 'timestamp', name='uix_ohlcv')
+    )
+    # Trades Tabelle (Platzhalter, Details später)
+    Table('trades', meta,
+        Column('id', Integer, primary_key=True),
+        Column('symbol', String(32), index=True),
+        Column('market_type', String(16), index=True),
+        Column('timestamp', DateTime, index=True),
+        Column('side', String(8)),
+        Column('qty', Float),
+        Column('price', Float),
+        Column('fee', Float),
+        Column('profit', Float),
+        Column('order_id', String(64)),
+        Column('extra', Text)
+    )
+    # Logs Tabelle (Platzhalter, Details später)
+    Table('logs', meta,
+        Column('id', Integer, primary_key=True),
+        Column('timestamp', DateTime, index=True),
+        Column('level', String(16)),
+        Column('source', String(20)),
+        Column('message', Text)
+    )
+    meta.create_all(engine)
+
+pg_engine = get_pg_engine()
+create_tables(pg_engine)
+Session = sessionmaker(bind=pg_engine)
 
 class DataFetcher:
+    def save_trade_to_db(self, trade_dict):
+        """Speichert einen Trade in der Datenbank."""
+        session = Session()
+        try:
+            session.execute(sqlalchemy.text("""
+                INSERT INTO trades (symbol, market_type, timestamp, side, qty, price, fee, profit, order_id, extra)
+                VALUES (:symbol, :market_type, :timestamp, :side, :qty, :price, :fee, :profit, :order_id, :extra)
+            """), trade_dict)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.log_to_db('ERROR', 'data', f"[ERROR] Trade DB-Save fehlgeschlagen: {e}")
+        finally:
+            session.close()
+
+    def save_ohlcv_to_db(self, df, symbol, market_type='spot'):
+        """Speichert OHLCV-Daten in PostgreSQL (ersetzt/fügt ein)."""
+        if df.empty:
+            return
+        session = Session()
+        try:
+            for _, row in df.iterrows():
+                exists = session.execute(
+                    sqlalchemy.text("""
+                        SELECT id FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type AND timestamp=:timestamp
+                    """),
+                    dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'])
+                ).first()
+                if exists:
+                    session.execute(sqlalchemy.text("""
+                        UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume, signal=:signal, signal_reason=:signal_reason
+                        WHERE id=:id
+                    """),
+                        dict(id=exists.id, open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'], signal=bool(row.get('signal', False)), signal_reason=str(row.get('signal_reason', '')))
+                    )
+                else:
+                    session.execute(sqlalchemy.text("""
+                        INSERT INTO ohlcv (symbol, market_type, timestamp, open, high, low, close, volume, signal, signal_reason)
+                        VALUES (:symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume, :signal, :signal_reason)
+                    """),
+                        dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'], open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'], signal=bool(row.get('signal', False)), signal_reason=str(row.get('signal_reason', '')))
+                    )
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            # Error logging only valid in except block where 'e' is defined
+        finally:
+            session.close()
+
+    def load_ohlcv_from_db(self, symbol, market_type='spot', limit=500):
+        """Lädt OHLCV-Daten aus PostgreSQL."""
+        session = Session()
+        try:
+            rows = session.execute(sqlalchemy.text("""
+                SELECT timestamp, open, high, low, close, volume, signal, signal_reason
+                FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type
+                ORDER BY timestamp DESC LIMIT :limit
+            """), dict(symbol=symbol, market_type=market_type, limit=limit)).fetchall()
+            if not rows:
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
+            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df.sort_values('timestamp')
+        except Exception as e:
+            logger.log_to_db('ERROR', 'data', f"[ERROR] OHLCV DB-Load fehlgeschlagen: {e}")
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
+        finally:
+            session.close()
+            if not rows:
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
+            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df.sort_values('timestamp')
+
+    def load_logs_from_db(self, level=None, limit=100):
+        """Lädt Logs aus der Datenbank (optional gefiltert)."""
+        session = Session()
+        try:
+            query = "SELECT * FROM logs"
+            params = {}
+            if level:
+                query += " WHERE level=:level"
+                params = dict(level=level)
+            query += " ORDER BY timestamp DESC LIMIT :limit"
+            params['limit'] = limit
+            rows = session.execute(sqlalchemy.text(query), params).fetchall()
+            df = pd.DataFrame(rows, columns=[c.name for c in session.get_bind().execute(sqlalchemy.text('SELECT * FROM logs LIMIT 1')).keys()]) if rows else pd.DataFrame()
+            return df
+        except Exception as e:
+            logger.log_to_db('ERROR', 'data', f"[ERROR] Logs DB-Load fehlgeschlagen: {e}")
+            return pd.DataFrame()
+        finally:
+            session.close()
+
     def archive_ohlcv(self, symbol, market_type='spot', keep_days=2):
         """Archiviert ältere OHLCV-Daten monatlich und hält nur die letzten keep_days im Arbeitsfile."""
         filename = self.get_ohlcv_filename(symbol, market_type)
         if not os.path.exists(filename):
+            logger.log_to_db('ERROR', 'data', f"[ERROR] Logs DB-Load fehlgeschlagen: Datei {filename} nicht gefunden.")
             return
         df = pd.read_csv(filename, parse_dates=['timestamp'])
         if df.empty:
@@ -55,13 +203,13 @@ class DataFetcher:
                     group.to_csv(archive_file, mode='w', header=True, index=False, encoding='utf-8')
             # Arbeitsfile überschreiben mit den zu behaltenden Daten
             to_keep.to_csv(filename, index=False, encoding='utf-8')
-            logger.info(f"[INFO] OHLCV für {symbol} ({market_type}) archiviert bis {cutoff.date()} und Rolling-Window aktualisiert.")
-        else:
-            logger.debug(f"[DEBUG] Keine OHLCV-Daten für {symbol} ({market_type}) zu archivieren.")
+            logger.log_to_db('INFO', 'data', f"[INFO] OHLCV für {symbol} ({market_type}) archiviert bis {cutoff.date()} und Rolling-Window aktualisiert.")
+        # If nothing to archive, just log debug
+        logger.log_to_db('DEBUG', 'data', f"[DEBUG] Keine OHLCV-Daten für {symbol} ({market_type}) zu archivieren.")
 
     def fetch_full_portfolio(self):
         """Holt Spot- und Futures-Portfolio getrennt und gibt beide plus das Total zurück."""
-        import copy
+            # logger.log_to_db('ERROR', f"[ERROR] OHLCV DB-Save fehlgeschlagen: {e}")  # Only valid in except block
         spot_config = copy.deepcopy(self.config)
         spot_config['trading']['futures'] = False
         futures_config = copy.deepcopy(self.config)
@@ -70,76 +218,35 @@ class DataFetcher:
         futures = DataFetcher(futures_config).fetch_portfolio()
         total_value = (spot.get('total_value', 0.0) if spot else 0.0) + (futures.get('total_value', 0.0) if futures else 0.0)
         return {'spot': spot, 'futures': futures, 'total_value': total_value}
-
-    def get_ohlcv_filename(self, symbol, market_type='spot'):
-        """Dateiname für Symbol und Markt-Typ."""
-        base = symbol.replace('/', '')
-        return f'logs/ohlcv_{base}_futures.csv' if market_type == 'futures' else f'logs/ohlcv_{base}.csv'
-
-    def save_ohlcv_to_file(self, df, symbol, market_type='spot'):
-        """Speichert OHLCV-Daten für ein Symbol/Typ und archiviert ältere Daten automatisch.
-        Berechnet und speichert die Spalten 'signal' und 'signal_reason' für Nachvollziehbarkeit."""
-        filename = self.get_ohlcv_filename(symbol, market_type)
+    
+    def save_ohlcv(self, df, symbol, market_type='spot'):
+        """Speichert OHLCV-Daten in DB (und optional als CSV)."""
         # Signale und Gründe berechnen
         try:
-            from strategy import get_strategy
             strategies = get_strategy(self.config)
             strat = strategies['spot_long'] if market_type == 'spot' else strategies['futures_short']
             df = strat.get_signals_and_reasons(df)
-        except Exception:
+        except Exception as e:
+            logger.log_to_db('ERROR', 'data', f"[ERROR] OHLCV Signalberechnung fehlgeschlagen: {e}")
             # Falls Strategie-Berechnung fehlschlägt, Spalten sicherstellen
             if 'signal' not in df.columns:
                 df['signal'] = False
             if 'signal_reason' not in df.columns:
                 df['signal_reason'] = ''
-        # Speichern
-        df.to_csv(filename, index=False, encoding='utf-8')
-        # Archivieren und Rolling-Window anwenden
-        self.archive_ohlcv(symbol, market_type=market_type, keep_days=2)
-
-    def load_ohlcv_from_file(self, symbol, market_type='spot', create_if_missing=True):
-        """Lädt OHLCV-Daten für ein Symbol/Typ. Erstellt leere Datei mit vollständigem Header, falls nicht vorhanden und create_if_missing=True."""
-        filename = self.get_ohlcv_filename(symbol, market_type)
-        if os.path.exists(filename):
-            return pd.read_csv(filename, parse_dates=['timestamp'])
-        elif create_if_missing:
-            columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason']
-            df = pd.DataFrame(columns=columns)
-            df.to_csv(filename, index=False, encoding='utf-8')
-            return df
-        else:
-            return pd.DataFrame()
-
-    def fetch_and_save_ohlcv_for_symbols(self, symbols, market_type='spot', limit=500):
-        """Lädt und speichert OHLCV-Daten für alle angegebenen Symbole/Typen."""
-        for symbol in symbols:
-            self.symbol = symbol
-            try:
-                df = self.fetch_ohlcv(limit=limit)
-                if not df.empty:
-                    self.save_ohlcv_to_file(df, symbol, market_type)
-                else:
-                    logger.warning(f'[WARN] Keine OHLCV-Daten für {symbol} ({market_type}) geladen.')
-            except Exception as e:
-                logger.error(f'[ERROR] Fehler beim Laden/Speichern von OHLCV für {symbol} ({market_type}): {e}')
-
-    def get_spot_symbols(self):
-        """Alle verfügbaren Spot-Symbole (BASE/QUOTE)."""
-        try:
-            markets = self.exchange.load_markets()
-            return sorted([m.replace('_', '/') for m in markets if markets[m]['spot'] and markets[m]['active'] and '/' in m])
-        except Exception as e:
-            logger.error(f"[ERROR] Spot-Symbole konnten nicht geladen werden: {e}")
-            return []
+                df['signal_reason'] = ''
+        # In DB speichern
+        self.save_ohlcv_to_db(df, symbol, market_type)
+    def load_ohlcv(self, symbol, market_type='spot', limit=500):
+        """Lädt OHLCV-Daten ausschließlich aus der DB."""
+        return self.load_ohlcv_from_db(symbol, market_type, limit=limit)
 
     def get_futures_symbols(self):
-        """Alle verfügbaren USDT-M Perpetual Futures-Symbole (BASEUSDT) von Binance REST-API."""
         import requests
         try:
             url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
             resp = requests.get(url, timeout=10)
             if resp.status_code != 200:
-                logger.error(f"[ERROR] Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}")
+                logger.log_to_db('ERROR', 'data', f"[ERROR] Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}")
                 return []
             data = resp.json()
             return sorted([
@@ -150,10 +257,10 @@ class DataFetcher:
                 and s['status'] == 'TRADING'
             ])
         except Exception as e:
-            logger.error(f"[ERROR] Futures-Symbole konnten nicht geladen werden: {e}")
+            logger.log_to_db('ERROR', 'data', f"[ERROR] Futures-Symbole konnten nicht geladen werden: {e}")
             return []
 
-    def __init__(self, config):
+        # Removed stray logger.log_to_db, not valid here
         self.config = config
         self._init_exchange()
         trading_cfg = config.get('trading', {})
@@ -162,20 +269,20 @@ class DataFetcher:
         if not self.symbol and self.symbols:
             self.symbol = self.symbols[0] if isinstance(self.symbols, list) and len(self.symbols) > 0 else None
         self.timeframe = trading_cfg.get('timeframe')
-
+        # Removed stray logger.log_to_db, not valid here
     def _init_exchange(self):
         mode = self.config['execution']['mode']
         is_futures = self.config.get('trading', {}).get('futures', False)
         if mode == 'testnet':
             api_key = os.getenv('BINANCE_API_KEY_TEST')
             api_secret = os.getenv('BINANCE_API_SECRET_TEST')
-            options = {'defaultType': 'future' if is_futures else 'spot'}
+            logger.log_to_db('INFO', 'data', '[INFO] Fetching OHLCV from Binance Spot Testnet via HTTP')
             urls = None
             if not is_futures:
                 urls = {
                     'api': {
                         'public': 'https://testnet.binance.vision/api',
-                        'private': 'https://testnet.binance.vision/api',
+                    # Error logging only valid in except block where 'response' is defined
                     }
                 }
             self.exchange = ccxt.binance({
@@ -188,7 +295,7 @@ class DataFetcher:
             self.exchange.set_sandbox_mode(True)
         else:
             api_key = os.getenv('BINANCE_API_KEY')
-            api_secret = os.getenv('BINANCE_API_SECRET')
+                # Error logging only valid in except block where 'e' is defined
             options = {'defaultType': 'future', 'contractType': 'PERPETUAL'} if is_futures else {'defaultType': 'spot'}
             self.exchange = ccxt.binance({
                 'apiKey': api_key,
@@ -198,7 +305,7 @@ class DataFetcher:
             })
 
     def fetch_portfolio(self):
-        """Lädt aktuelle Portfolio-Balances und Asset-Werte von Binance."""
+                # Error logging only valid in except block where 'e' is defined
         try:
             try:
                 balances = self.exchange.fetch_balance()

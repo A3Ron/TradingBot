@@ -4,3 +4,5 @@ pandas-ta
 pyyaml
 streamlit
 st_autorefresh
+psycopg2-binary
+sqlalchemy

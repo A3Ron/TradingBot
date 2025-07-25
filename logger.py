@@ -1,20 +1,13 @@
-import csv
-import os
+
 from datetime import datetime
 from dotenv import load_dotenv
+from data import DataFetcher
 load_dotenv()
 
-class Logger:
-    def __init__(self, log_path):
-        self.log_path = log_path
-        if not os.path.exists(log_path):
-            with open(log_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['timestamp','symbol','entry_price','exit_price','stop_loss','take_profit','volume','outcome','exit_type','signal_reason'])
 
-    def log_trade(self, symbol, entry, exit, stop_loss, take_profit, volume, outcome, exit_type=None, signal_reason=None):
-        with open(self.log_path, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                datetime.now().isoformat(), symbol, entry, exit, stop_loss, take_profit, volume, outcome, exit_type, signal_reason
-            ])
+class Logger:
+    def __init__(self, config=None):
+        self.config = config or {}
+
+    def log_to_db(self, level, source, message):
+        DataFetcher(self.config or {}).save_log_to_db(level, source, message)
