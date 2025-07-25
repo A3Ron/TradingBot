@@ -7,10 +7,10 @@ import os
 import yaml
 import subprocess
 import signal
-from data import DataFetcher
 from streamlit_autorefresh import st_autorefresh
 from dotenv import load_dotenv
 load_dotenv()
+from data import DataFetcher
 
 # Alle 59 Sekunden neu laden
 st_autorefresh(interval=59 * 1000, key="refresh")
@@ -27,9 +27,6 @@ def convert_to_swiss_time(ts):
     return ts.tz_convert('Europe/Zurich')
 
 # --- Function Definitions ---
-def load_trades(config=None):
-    # Holt Trades direkt aus der Datenbank
-    return DataFetcher(config or {}).load_trades_from_db(limit=1000)
 
 def load_config(config_path):
     if os.path.exists(config_path):
@@ -85,7 +82,9 @@ config_path = "config.yaml"
 PID_FILE = "bot.pid"
 MAIN_SCRIPT = "main.py"
 config = load_config(config_path)
-df = load_trades(config)
+# Single DataFetcher instance
+dfetcher = DataFetcher(config)
+trade_df = dfetcher.load_trades_from_db(limit=1000)
 
 # --- UI Code ---
 col_title, col_btn = st.columns([4,1])
@@ -111,7 +110,6 @@ st.markdown(f"**Bot Status:** {'🟢 Läuft (PID: ' + str(pid) + ')' if running 
 # Portfolio Panel mit Session-State für Asset-Auswahl
 with st.expander("Portfolio Übersicht", expanded=True):
     try:
-        from data import DataFetcher
         with open('config.yaml') as f:
             config_portfolio = yaml.safe_load(f)
         fetcher = DataFetcher(config_portfolio)
@@ -382,7 +380,6 @@ with st.expander("Bot Einstellungen", expanded=False):
 with st.expander("Trade-Statistiken & Auswertung", expanded=False):
     st.subheader("Trade-Auswertung & Performance")
     # Trades aus DB laden
-    trade_df = DataFetcher(config).load_trades_from_db(limit=1000)
     # Grundauswertung
     if not trade_df.empty:
         trade_df = trade_df.dropna(subset=["entry_price", "exit_price"])  # nur abgeschlossene Trades
@@ -442,12 +439,6 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         if f"selected_{market_type}_symbol" not in st.session_state or st.session_state[f"selected_{market_type}_symbol"] not in symbols:
             st.session_state[f"selected_{market_type}_symbol"] = symbols[0]
         selected_symbol = st.selectbox("Symbol wählen", symbols, key=f"selected_{market_type}_symbol")
-        # Datei bestimmen
-        base = selected_symbol.replace('/', '')
-        if market_type == 'futures':
-            ohlcv_path = f"logs/ohlcv_{base}_futures.csv"
-        else:
-            ohlcv_path = f"logs/ohlcv_{base}.csv"
         # Zeitraum-Optionen
         time_ranges = {
             "5m": timedelta(minutes=5),
@@ -458,9 +449,11 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         if 'selected_range' not in st.session_state or st.session_state['selected_range'] not in time_range_keys:
             st.session_state['selected_range'] = time_range_keys[1]
         selected_range = st.selectbox("Zeitraum", time_range_keys, key='selected_range')
-        # Datei laden
-        if os.path.exists(ohlcv_path) and os.path.getsize(ohlcv_path) > 0:
-            ohlcv_df = pd.read_csv(ohlcv_path)
+        # OHLCV-Daten über DataFetcher laden
+        ohlcv_df = dfetcher.load_ohlcv_from_db(selected_symbol, market_type)
+        if ohlcv_df is None or ohlcv_df.empty:
+            st.info("Keine OHLCV-Daten für dieses Symbol/Markt-Typ geladen oder Datei ist leer.")
+        else:
             # Signale und Gründe nachladen für Anzeige
             try:
                 from strategy import get_strategy
@@ -515,19 +508,17 @@ with st.expander("Binance OHLCV Daten", expanded=False):
                     )
                     layers.append(signal_points)
                 # Entry/Exit-Marker aus Trade-Log
-                # Trades aus DB laden
-                trade_df = DataFetcher(config).load_trades_from_db(limit=1000)
-                trade_df = trade_df[trade_df['symbol'] == selected_symbol]
-                if not trade_df.empty:
+                trade_df_symbol = trade_df[trade_df['symbol'] == selected_symbol]
+                if not trade_df_symbol.empty:
                     # Entry-Marker (grün)
-                    entry_points = alt.Chart(trade_df).mark_point(color='green', shape='triangle-up', size=100).encode(
+                    entry_points = alt.Chart(trade_df_symbol).mark_point(color='green', shape='triangle-up', size=100).encode(
                         x=alt.X('timestamp:T'),
                         y=alt.Y('entry_price:Q'),
                         tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
                     )
                     # Exit-Marker (blau)
-                    if 'exit_price' in trade_df.columns:
-                        exit_points = alt.Chart(trade_df.dropna(subset=['exit_price'])).mark_point(color='blue', shape='triangle-down', size=100).encode(
+                    if 'exit_price' in trade_df_symbol.columns:
+                        exit_points = alt.Chart(trade_df_symbol.dropna(subset=['exit_price'])).mark_point(color='blue', shape='triangle-down', size=100).encode(
                             x=alt.X('timestamp:T'),
                             y=alt.Y('exit_price:Q'),
                             tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
@@ -550,5 +541,3 @@ with st.expander("Binance OHLCV Daten", expanded=False):
                     st.altair_chart(vol_chart, use_container_width=True)
                 # Tabelle mit allen Werten im gewählten Zeitraum und Symbol
                 st.dataframe(df_symbol)
-        else:
-            st.write("Keine OHLCV-Daten für dieses Symbol/Markt-Typ geladen oder Datei ist leer.")
