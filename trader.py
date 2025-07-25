@@ -80,7 +80,9 @@ class SpotLongTrader(BaseTrader):
 
     def execute_trade(self, signal):
         # Determine base volume by risk percentage logic
+        self.data.save_log('DEBUG', 'trader', f"Starte execute_trade für {self.symbol} (LONG). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}")
         volume = self.get_trade_volume(signal)
+        self.data.save_log('DEBUG', 'trader', f"Berechnetes Volumen für {self.symbol}: {volume}")
         msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
             self.data.save_log('INFO', 'trader', f"[TESTNET] {msg}")
@@ -99,19 +101,21 @@ class SpotLongTrader(BaseTrader):
                 'extra': '[TESTNET]'
             }
             self.data.save_trade_to_db(trade_dict)
+            self.data.save_log('INFO', 'trader', f"Testnet-Trade gespeichert: {trade_dict}")
             return True
         try:
-            # Use quoteOrderQty to satisfy minimum notional constraints
+            self.data.save_log('DEBUG', 'trader', f"Sende Market-BUY Order für {self.symbol}...")
             ticker = self.exchange.fetch_ticker(self.symbol)
             price = ticker.get('last') or ticker.get('close')
             if price:
                 quote_qty = volume * price
             else:
                 quote_qty = volume
+            self.data.save_log('DEBUG', 'trader', f"Nutze quoteOrderQty={quote_qty} für {self.symbol}")
             order = self.exchange.create_order(
                 self.symbol, 'MARKET', 'BUY', None, None, {'quoteOrderQty': quote_qty}
             )
-            self.data.save_log('INFO', 'trader', f"Order executed: {order}")
+            self.data.save_log('INFO', 'trader', f"Order ausgeführt: {order}")
             self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             # Trade in DB speichern
             trade_dict = {
@@ -127,9 +131,10 @@ class SpotLongTrader(BaseTrader):
                 'extra': str(order)
             }
             self.data.save_trade_to_db(trade_dict)
+            self.data.save_log('INFO', 'trader', f"Trade in DB gespeichert: {trade_dict}")
             return order
         except Exception as e:
-            self.data.save_log('ERROR', 'trader', f"Trade failed: {e}")
+            self.data.save_log('ERROR', 'trader', f"Trade fehlgeschlagen: {e}")
             self.send_telegram(f"LONG Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
@@ -207,7 +212,7 @@ class FuturesShortTrader(BaseTrader):
             raise
 
     def execute_trade(self, signal):
-        # Use fixed notional amount (25 USDT) for futures trades
+        self.data.save_log('DEBUG', 'trader', f"Starte execute_trade für {self.symbol} (SHORT). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}")
         fixed_notional = self.config.get('trading', {}).get('fixed_futures_notional', 25)
         ticker = self.exchange.fetch_ticker(self.symbol)
         price = ticker.get('last') or ticker.get('close')
@@ -215,7 +220,7 @@ class FuturesShortTrader(BaseTrader):
             volume = fixed_notional / price
         else:
             volume = signal.volume
-        # Update signal volume to executed amount later
+        self.data.save_log('DEBUG', 'trader', f"Berechnetes Volumen für {self.symbol}: {volume}")
         msg = f"SHORT {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
             self.data.save_log('INFO', 'trader', f"[TESTNET] {msg}")
@@ -234,15 +239,16 @@ class FuturesShortTrader(BaseTrader):
                 'extra': '[TESTNET]'
             }
             self.data.save_trade_to_db(trade_dict)
-            self.data.save_log('INFO', 'trader', f"Testnet trade saved: {trade_dict}")
+            self.data.save_log('INFO', 'trader', f"Testnet-Trade gespeichert: {trade_dict}")
             return True
         try:
+            self.data.save_log('DEBUG', 'trader', f"Sende Market-SELL Order für {self.symbol}...")
             order = self.exchange.create_market_sell_order(
                 self.symbol,
                 volume,
                 params={"reduceOnly": False}
             )
-            self.data.save_log('INFO', 'trader', f"Short order executed: {order}")
+            self.data.save_log('INFO', 'trader', f"Short-Order ausgeführt: {order}")
             self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             # Update signal volume to actual executed amount
             signal.volume = order.get('amount', volume)
@@ -260,10 +266,10 @@ class FuturesShortTrader(BaseTrader):
                 'extra': str(order)
             }
             self.data.save_trade_to_db(trade_dict)
-            self.data.save_log('INFO', 'trader', f"Trade saved to DB: {trade_dict}")
+            self.data.save_log('INFO', 'trader', f"Trade in DB gespeichert: {trade_dict}")
             return order
         except Exception as e:
-            self.data.save_log('ERROR', 'trader', f"Short trade failed: {e}")
+            self.data.save_log('ERROR', 'trader', f"Short-Trade fehlgeschlagen: {e}")
             self.send_telegram(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
