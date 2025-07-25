@@ -75,10 +75,6 @@ with open(CONFIG_PATH) as f:
     config = yaml.safe_load(f)
 config = resolve_env_vars(config)
 
-# Ersetze Telegram-Token und Chat-ID durch Umgebungsvariablen
-config['telegram']['token'] = os.getenv('TELEGRAM_TOKEN')
-config['telegram']['chat_id'] = os.getenv('TELEGRAM_CHAT_ID')
-
 
 # Symbollisten für Spot (Long) und Futures (Short) aus Config
 spot_symbols = config['trading'].get('symbols', [])
