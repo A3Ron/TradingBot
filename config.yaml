@@ -7,6 +7,12 @@ execution:
 logging:
   enabled: true
   path: logs/trades.csv
+postgres:
+  host: localhost
+  port: 5432
+  database: tradingbot
+  user: postgres
+  password: postgres
 telegram:
   chat_id: ${TELEGRAM_CHAT_ID}
   token: ${TELEGRAM_TOKEN}

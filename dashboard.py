@@ -7,6 +7,7 @@ import os
 import yaml
 import subprocess
 import signal
+from data import DataFetcher
 from streamlit_autorefresh import st_autorefresh
 from dotenv import load_dotenv
 load_dotenv()
@@ -26,34 +27,15 @@ def convert_to_swiss_time(ts):
     return ts.tz_convert('Europe/Zurich')
 
 # --- Function Definitions ---
-def load_trades(log_path):
-    if os.path.exists(log_path):
-        if os.path.getsize(log_path) > 0:
-            df = pd.read_csv(log_path)
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce').dt.tz_localize('UTC').dt.tz_convert('Europe/Zurich')
-            return df
-        else:
-            # Leere Datei, gebe leeres DataFrame mit Spaltennamen zurück
-            return pd.DataFrame(columns=[
-                "timestamp","symbol","entry_price","exit_price","stop_loss","take_profit","volume","outcome","exit_type","signal_reason"
-            ])
-    return pd.DataFrame(columns=[
-        "timestamp","symbol","entry_price","exit_price","stop_loss","take_profit","volume","outcome","exit_type","signal_reason"
-    ])
+def load_trades(config=None):
+    # Holt Trades direkt aus der Datenbank
+    return DataFetcher(config or {}).load_trades_from_db(limit=1000)
 
 def load_config(config_path):
     if os.path.exists(config_path):
         with open(config_path) as f:
             return yaml.safe_load(f)
     return {}
-
-def load_botlog(log_path, lines=30):
-    if os.path.exists(log_path):
-        with open(log_path, encoding="utf-8") as f:
-            loglines = f.readlines()
-        return loglines[-lines:]
-    return ["Keine Logdaten gefunden."]
 
 def get_pid():
     if os.path.exists(PID_FILE):
@@ -99,13 +81,11 @@ def stop_bot():
         return False, f"Fehler beim Stoppen: {e}"
 
 # --- Constants and Initial Data ---
-log_path = "logs/trades.csv"
 config_path = "config.yaml"
-botlog_path = "logs/bot.log"
 PID_FILE = "bot.pid"
 MAIN_SCRIPT = "main.py"
-df = load_trades(log_path)
 config = load_config(config_path)
+df = load_trades(config)
 
 # --- UI Code ---
 col_title, col_btn = st.columns([4,1])
@@ -401,10 +381,10 @@ with st.expander("Bot Einstellungen", expanded=False):
 # --- Trade-Statistik-Panel ---
 with st.expander("Trade-Statistiken & Auswertung", expanded=False):
     st.subheader("Trade-Auswertung & Performance")
-    trade_log_path = "logs/trades.csv"
-    if os.path.exists(trade_log_path) and os.path.getsize(trade_log_path) > 0:
-        trade_df = pd.read_csv(trade_log_path)
-        # Grundauswertung
+    # Trades aus DB laden
+    trade_df = DataFetcher(config).load_trades_from_db(limit=1000)
+    # Grundauswertung
+    if not trade_df.empty:
         trade_df = trade_df.dropna(subset=["entry_price", "exit_price"])  # nur abgeschlossene Trades
         trade_df = trade_df[trade_df["outcome"] == "closed"]
         if not trade_df.empty:
@@ -535,28 +515,27 @@ with st.expander("Binance OHLCV Daten", expanded=False):
                     )
                     layers.append(signal_points)
                 # Entry/Exit-Marker aus Trade-Log
-                trade_log_path = "logs/trades.csv"
-                if os.path.exists(trade_log_path) and os.path.getsize(trade_log_path) > 0:
-                    trade_df = pd.read_csv(trade_log_path)
-                    trade_df = trade_df[trade_df['symbol'] == selected_symbol]
-                    if not trade_df.empty:
-                        # Entry-Marker (grün)
-                        entry_points = alt.Chart(trade_df).mark_point(color='green', shape='triangle-up', size=100).encode(
+                # Trades aus DB laden
+                trade_df = DataFetcher(config).load_trades_from_db(limit=1000)
+                trade_df = trade_df[trade_df['symbol'] == selected_symbol]
+                if not trade_df.empty:
+                    # Entry-Marker (grün)
+                    entry_points = alt.Chart(trade_df).mark_point(color='green', shape='triangle-up', size=100).encode(
+                        x=alt.X('timestamp:T'),
+                        y=alt.Y('entry_price:Q'),
+                        tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
+                    )
+                    # Exit-Marker (blau)
+                    if 'exit_price' in trade_df.columns:
+                        exit_points = alt.Chart(trade_df.dropna(subset=['exit_price'])).mark_point(color='blue', shape='triangle-down', size=100).encode(
                             x=alt.X('timestamp:T'),
-                            y=alt.Y('entry_price:Q'),
+                            y=alt.Y('exit_price:Q'),
                             tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
                         )
-                        # Exit-Marker (blau)
-                        if 'exit_price' in trade_df.columns:
-                            exit_points = alt.Chart(trade_df.dropna(subset=['exit_price'])).mark_point(color='blue', shape='triangle-down', size=100).encode(
-                                x=alt.X('timestamp:T'),
-                                y=alt.Y('exit_price:Q'),
-                                tooltip=['timestamp', 'entry_price', 'exit_price', 'exit_type', 'signal_reason']
-                            )
-                            layers.append(entry_points)
-                            layers.append(exit_points)
-                        else:
-                            layers.append(entry_points)
+                        layers.append(entry_points)
+                        layers.append(exit_points)
+                    else:
+                        layers.append(entry_points)
                 chart = alt.layer(*layers).interactive()
                 st.altair_chart(chart, use_container_width=True)
                 # Volumen als separater interaktiver Chart
@@ -573,19 +552,3 @@ with st.expander("Binance OHLCV Daten", expanded=False):
                 st.dataframe(df_symbol)
         else:
             st.write("Keine OHLCV-Daten für dieses Symbol/Markt-Typ geladen oder Datei ist leer.")
-
-# Trade Log Panel direkt vor Bot Log
-with st.expander("Trade Log", expanded=False):
-    st.subheader("Letzte Trade-Log-Zeilen")
-    trade_log_path = "logs/trades.csv"
-    if os.path.exists(trade_log_path) and os.path.getsize(trade_log_path) > 0:
-        trade_df = pd.read_csv(trade_log_path)
-        st.dataframe(trade_df.tail(30))
-    else:
-        st.write("Keine Trade-Logdaten gefunden oder Datei ist leer.")
-
-# Bot Log ganz unten
-with st.expander("Bot Log", expanded=False):
-    st.subheader("Letzte Log-Zeilen")
-    loglines = load_botlog(botlog_path, lines=30)
-    st.text("".join(loglines))
