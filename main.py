@@ -121,7 +121,6 @@ elif futures_traders:
 open_trades_spot = {symbol: None for symbol in spot_symbols}
 open_trades_futures = {symbol: None for symbol in futures_symbols}
 
-
 def handle_spot_trades():
     global last_candle_time_spot, open_trade_spot
     candidate_spot = []
