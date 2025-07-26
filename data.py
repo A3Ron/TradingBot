@@ -159,7 +159,7 @@ class DataFetcher:
             url = "https://api.binance.com/api/v3/exchangeInfo"
             resp = requests.get(url, timeout=10)
             if resp.status_code != 200:
-                self.save_log('ERROR', 'data', f"Fehler beim Laden der Binance Spot exchangeInfo: {resp.status_code}")
+                self.save_log('ERROR', 'data', 'get_spot_symbols', f"Fehler beim Laden der Binance Spot exchangeInfo: {resp.status_code}")
                 return []
             data = resp.json()
             return sorted([
@@ -170,7 +170,7 @@ class DataFetcher:
                 and s['quoteAsset'] == 'USDT'
             ])
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Spot-Symbole konnten nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'get_spot_symbols', f"Spot-Symbole konnten nicht geladen werden: {e}")
             return []
 
     def get_futures_symbols(self):
@@ -178,7 +178,7 @@ class DataFetcher:
             url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
             resp = requests.get(url, timeout=10)
             if resp.status_code != 200:
-                self.save_log('ERROR', 'data', f"Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}")
+                self.save_log('ERROR', 'data', 'get_futures_symbols', f"Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}")
                 return []
             data = resp.json()
             return sorted([
@@ -189,7 +189,7 @@ class DataFetcher:
                 and s['status'] == 'TRADING'
             ])
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Futures-Symbole konnten nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'get_futures_symbols', f"Futures-Symbole konnten nicht geladen werden: {e}")
             return []
 
     # --- OHLCV ---
@@ -203,7 +203,7 @@ class DataFetcher:
             strat = strategies['spot_long'] if market_type == 'spot' else strategies['futures_short']
             df = strat.get_signals_and_reasons(df)
         except Exception as e:
-            self.save_log('ERROR', 'data', f"OHLCV Signalberechnung fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV Signalberechnung fehlgeschlagen: {e}")
             # Falls Strategie-Berechnung fehlschlägt, Spalten sicherstellen
             if 'signal' not in df.columns:
                 df['signal'] = False
@@ -251,7 +251,7 @@ class DataFetcher:
             session.commit()
         except Exception as e:
             session.rollback()
-            self.save_log('ERROR', 'data', f"OHLCV DB-Save fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV DB-Save fehlgeschlagen: {e}")
         finally:
             session.close()
 
@@ -270,7 +270,7 @@ class DataFetcher:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df.sort_values('timestamp')
         except Exception as e:
-            self.save_log('ERROR', 'data', f"OHLCV DB-Load fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'load_ohlcv', f"OHLCV DB-Load fehlgeschlagen: {e}")
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'price_change', 'volume_score', 'rsi'])
         finally:
             session.close()
@@ -289,22 +289,22 @@ class DataFetcher:
                 df = self.fetch_ohlcv(limit=limit)
                 if not df.empty:
                     self.save_ohlcv(df, symbol, market_type)
-                    self.save_log('INFO', 'DataFetcher.fetch_and_save_ohlcv_for_symbols', f"OHLCV für {symbol} ({market_type}) gespeichert. Zeilen: {len(df)}")
+                    self.save_log('INFO', 'data', 'fetch_and_save_ohlcv_for_symbols', f"OHLCV für {symbol} ({market_type}) gespeichert. Zeilen: {len(df)}")
                 else:
-                    self.save_log('WARNING', 'DataFetcher.fetch_and_save_ohlcv_for_symbols', f"Keine OHLCV-Daten für {symbol} ({market_type}) geladen.")
+                    self.save_log('WARNING', 'data', 'fetch_and_save_ohlcv_for_symbols', f"Keine OHLCV-Daten für {symbol} ({market_type}) geladen.")
             except Exception as e:
-                self.save_log('ERROR', 'DataFetcher.fetch_and_save_ohlcv_for_symbols', f"Fehler beim Laden/Speichern von OHLCV für {symbol} ({market_type}): {e}")
+                self.save_log('ERROR', 'data', 'fetch_and_save_ohlcv_for_symbols', f"Fehler beim Laden/Speichern von OHLCV für {symbol} ({market_type}): {e}")
 
     def fetch_ohlcv(self, limit=50):
         """Lädt OHLCV-Daten für das aktuelle Symbol/Timeframe."""
         if hasattr(self, 'exchange') and hasattr(self.exchange, 'urls') and self.exchange.urls['api']['public'].startswith('https://testnet.binance.vision'):
-            self.save_log('INFO', 'data', 'Fetching OHLCV from Binance Spot Testnet via HTTP')
+            self.save_log('INFO', 'data', 'fetch_ohlcv', 'Fetching OHLCV from Binance Spot Testnet via HTTP')
             base_url = 'https://testnet.binance.vision/api/v3/klines'
             params = {'symbol': self.symbol.replace('/', ''), 'limit': limit}
             try:
                 response = requests.get(base_url, params=params, timeout=10)
                 if response.status_code != 200:
-                    self.save_log('ERROR', 'data', f'HTTP Request failed: {response.text}')
+                    self.save_log('ERROR', 'data', 'fetch_ohlcv', f'HTTP Request failed: {response.text}')
                     response.raise_for_status()
                 raw = response.json()
                 df = pd.DataFrame(raw, columns=[
@@ -317,7 +317,7 @@ class DataFetcher:
                 df = df.astype({'open': float, 'high': float, 'low': float, 'close': float, 'volume': float})
                 return df
             except requests.exceptions.RequestException as e:
-                self.save_log('ERROR', 'data', f'HTTP Request failed: {e}')
+                self.save_log('ERROR', 'data', 'fetch_ohlcv', f'HTTP Request failed: {e}')
                 return pd.DataFrame()
         else:
             try:
@@ -326,8 +326,7 @@ class DataFetcher:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 return df
             except Exception as e:
-                self.save_log('ERROR', 'data', f"Binance fetch_ohlcv failed: {e}")
-                self.save_log('DEBUG', 'data', traceback.format_exc())
+                self.save_log('ERROR', 'data', 'fetch_ohlcv', f"Binance fetch_ohlcv failed: {e}\n{traceback.format_exc()}")
                 raise
 
     # --- Trades ---
@@ -342,7 +341,7 @@ class DataFetcher:
             session.commit()
         except Exception as e:
             session.rollback()
-            self.save_log('ERROR', 'data', f"Trade DB-Save fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_trade', f"Trade DB-Save fehlgeschlagen: {e}")
         finally:
             session.close()
 
@@ -362,7 +361,7 @@ class DataFetcher:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Trades DB-Load fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'load_trades', f"Trades DB-Load fehlgeschlagen: {e}")
             return pd.DataFrame()
         finally:
             session.close()
@@ -375,13 +374,13 @@ class DataFetcher:
         try:
             spot = self.fetch_single_portfolio(market_type='spot')
         except Exception as e:
-            self.save_log('ERROR', 'DataFetcher.fetch_portfolio', f"Spot-Portfolio konnte nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'fetch_portfolio', f"Spot-Portfolio konnte nicht geladen werden: {e}")
             spot = {'assets': [], 'total_value': 0.0, 'prices': {}}
         # Futures
         try:
             futures = self.fetch_single_portfolio(market_type='futures')
         except Exception as e:
-            self.save_log('ERROR', 'DataFetcher.fetch_portfolio', f"Futures-Portfolio konnte nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'fetch_portfolio', f"Futures-Portfolio konnte nicht geladen werden: {e}")
             futures = {'assets': [], 'total_value': 0.0, 'prices': {}}
         total_value = (spot.get('total_value', 0.0) if spot else 0.0) + (futures.get('total_value', 0.0) if futures else 0.0)
         results['spot'] = spot
@@ -396,11 +395,11 @@ class DataFetcher:
         try:
             balances = self.exchange.fetch_balance()
         except Exception as api_ex:
-            self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"fetch_balance API-Fehler: {api_ex}")
+            self.save_log('ERROR', 'data', 'fetch_single_portfolio', f"fetch_balance API-Fehler: {api_ex}")
             return {'assets': [], 'total_value': 0.0, 'prices': {}}
         assets, total_value, prices = [], 0.0, {}
         if not balances or 'total' not in balances or not isinstance(balances['total'], dict):
-            self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
+            self.save_log('ERROR', 'data', 'fetch_single_portfolio', f"'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
             return {'assets': [], 'total_value': 0.0, 'prices': {}}
         for asset, info in balances['total'].items():
             if not info:
@@ -413,10 +412,10 @@ class DataFetcher:
                     ticker = self.exchange.fetch_ticker(symbol)
                     price = ticker.get('last') or ticker.get('close') or 0.0
                     if price is None:
-                        self.save_log('WARNING', 'DataFetcher._fetch_single_portfolio', f"Kein Preis für {symbol} gefunden: {ticker}")
+                        self.save_log('WARNING', 'data', 'fetch_single_portfolio', f"Kein Preis für {symbol} gefunden: {ticker}")
                         price = 0.0
                 except Exception as ex:
-                    self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"Ticker-Fehler für {symbol}: {ex}")
+                    self.save_log('ERROR', 'data', 'fetch_single_portfolio', f"Ticker-Fehler für {symbol}: {ex}")
                     price = None
             value = info * price if price is not None else None
             if price is not None:
@@ -444,7 +443,7 @@ class DataFetcher:
             )
             session.commit()
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Log DB-Save fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_log', f"Log DB-Save fehlgeschlagen: {e}")
             session.rollback()
         finally:
             session.close()
@@ -495,7 +494,7 @@ class DataFetcher:
             url = "https://api.binance.com/api/v3/exchangeInfo"
             resp = requests.get(url, timeout=10)
             if resp.status_code != 200:
-                self.save_log('ERROR', 'data', f"Fehler beim Laden der Binance Spot exchangeInfo: {resp.status_code}")
+                self.save_log('ERROR', 'data', 'get_spot_symbols', f"Fehler beim Laden der Binance Spot exchangeInfo: {resp.status_code}")
                 return []
             data = resp.json()
             return sorted([
@@ -506,7 +505,7 @@ class DataFetcher:
                 and s['quoteAsset'] == 'USDT'
             ])
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Spot-Symbole konnten nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'get_spot_symbols', f"Spot-Symbole konnten nicht geladen werden: {e}")
             return []
         
     def save_log(self, level, source, message):
@@ -527,7 +526,7 @@ class DataFetcher:
             )
             session.commit()
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Log DB-Save fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_log', f"Log DB-Save fehlgeschlagen: {e}")
             session.rollback()
         finally:
             session.close()
@@ -548,7 +547,7 @@ class DataFetcher:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Trades DB-Load fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'load_trades', f"Trades DB-Load fehlgeschlagen: {e}")
             return pd.DataFrame()
         finally:
             session.close()
@@ -567,7 +566,7 @@ class DataFetcher:
             session.commit()
         except Exception as e:
             session.rollback()
-            self.save_log('ERROR', 'data', f"Trade DB-Save fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_trade', f"Trade DB-Save fehlgeschlagen: {e}")
         finally:
             session.close()
 
@@ -588,7 +587,7 @@ class DataFetcher:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df.sort_values('timestamp')
         except Exception as e:
-            self.save_log('ERROR', 'data', f"OHLCV DB-Load fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'load_ohlcv', f"OHLCV DB-Load fehlgeschlagen: {e}")
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
         finally:
             session.close()
@@ -608,7 +607,7 @@ class DataFetcher:
             df = pd.DataFrame(rows, columns=[c.name for c in session.get_bind().execute(sqlalchemy.text('SELECT * FROM logs LIMIT 1')).keys()]) if rows else pd.DataFrame()
             return df
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Logs DB-Load fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'load_logs', f"Logs DB-Load fehlgeschlagen: {e}")
             return pd.DataFrame()
         finally:
             session.close()
@@ -620,13 +619,13 @@ class DataFetcher:
         try:
             spot = self.fetch_single_portfolio(market_type='spot')
         except Exception as e:
-            self.save_log('ERROR', 'DataFetcher.fetch_portfolio', f"Spot-Portfolio konnte nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'fetch_portfolio', f"Spot-Portfolio konnte nicht geladen werden: {e}")
             spot = {'assets': [], 'total_value': 0.0, 'prices': {}}
         # Futures
         try:
             futures = self.fetch_single_portfolio(market_type='futures')
         except Exception as e:
-            self.save_log('ERROR', 'DataFetcher.fetch_portfolio', f"Futures-Portfolio konnte nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'fetch_portfolio', f"Futures-Portfolio konnte nicht geladen werden: {e}")
             futures = {'assets': [], 'total_value': 0.0, 'prices': {}}
         total_value = (spot.get('total_value', 0.0) if spot else 0.0) + (futures.get('total_value', 0.0) if futures else 0.0)
         results['spot'] = spot
@@ -641,11 +640,11 @@ class DataFetcher:
         try:
             balances = self.exchange.fetch_balance()
         except Exception as api_ex:
-            self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"fetch_balance API-Fehler: {api_ex}")
+            self.save_log('ERROR', 'data', 'fetch_single_portfolio', f"fetch_balance API-Fehler: {api_ex}")
             return {'assets': [], 'total_value': 0.0, 'prices': {}}
         assets, total_value, prices = [], 0.0, {}
         if not balances or 'total' not in balances or not isinstance(balances['total'], dict):
-            self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
+            self.save_log('ERROR', 'data', 'fetch_single_portfolio', f"'total' fehlt oder ist kein dict in fetch_balance response: {balances}")
             return {'assets': [], 'total_value': 0.0, 'prices': {}}
         for asset, info in balances['total'].items():
             if not info:
@@ -658,10 +657,10 @@ class DataFetcher:
                     ticker = self.exchange.fetch_ticker(symbol)
                     price = ticker.get('last') or ticker.get('close') or 0.0
                     if price is None:
-                        self.save_log('WARNING', 'DataFetcher._fetch_single_portfolio', f"Kein Preis für {symbol} gefunden: {ticker}")
+                        self.save_log('WARNING', 'data', 'fetch_single_portfolio', f"Kein Preis für {symbol} gefunden: {ticker}")
                         price = 0.0
                 except Exception as ex:
-                    self.save_log('ERROR', 'DataFetcher._fetch_single_portfolio', f"Ticker-Fehler für {symbol}: {ex}")
+                    self.save_log('ERROR', 'data', 'fetch_single_portfolio', f"Ticker-Fehler für {symbol}: {ex}")
                     price = None
             value = info * price if price is not None else None
             if price is not None:
@@ -680,7 +679,7 @@ class DataFetcher:
             strat = strategies['spot_long'] if market_type == 'spot' else strategies['futures_short']
             df = strat.get_signals_and_reasons(df)
         except Exception as e:
-            self.save_log('ERROR', 'data', f"OHLCV Signalberechnung fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV Signalberechnung fehlgeschlagen: {e}")
             # Falls Strategie-Berechnung fehlschlägt, Spalten sicherstellen
             if 'signal' not in df.columns:
                 df['signal'] = False
@@ -728,7 +727,7 @@ class DataFetcher:
             session.commit()
         except Exception as e:
             session.rollback()
-            self.save_log('ERROR', 'data', f"OHLCV DB-Save fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV DB-Save fehlgeschlagen: {e}")
         finally:
             session.close()
 
@@ -737,7 +736,7 @@ class DataFetcher:
             url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
             resp = requests.get(url, timeout=10)
             if resp.status_code != 200:
-                self.save_log('ERROR', 'data', f"Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}")
+                self.save_log('ERROR', 'data', 'get_futures_symbols', f"Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}")
                 return []
             data = resp.json()
             return sorted([
@@ -748,7 +747,7 @@ class DataFetcher:
                 and s['status'] == 'TRADING'
             ])
         except Exception as e:
-            self.save_log('ERROR', 'data', f"Futures-Symbole konnten nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'get_futures_symbols', f"Futures-Symbole konnten nicht geladen werden: {e}")
             return []
 
     def _init_exchange(self, market_type='spot'):
@@ -814,7 +813,7 @@ class DataFetcher:
             try:
                 response = requests.get(base_url, params=params, timeout=10)
                 if response.status_code != 200:
-                    self.save_log('ERROR', 'data', f'HTTP Request failed: {response.text}')
+                    self.save_log('ERROR', 'data', 'fetch_ohlcv', f'HTTP Request failed: {response.text}')
                     response.raise_for_status()
                 raw = response.json()
                 df = pd.DataFrame(raw, columns=[
@@ -827,7 +826,7 @@ class DataFetcher:
                 df = df.astype({'open': float, 'high': float, 'low': float, 'close': float, 'volume': float})
                 return df
             except requests.exceptions.RequestException as e:
-                self.save_log('ERROR', 'data', f'HTTP Request failed: {e}')
+                self.save_log('ERROR', 'data', 'fetch_ohlcv', f'HTTP Request failed: {e}')
                 return pd.DataFrame()
         else:
             try:
@@ -836,6 +835,6 @@ class DataFetcher:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 return df
             except Exception as e:
-                self.save_log('ERROR', 'data', f"Binance fetch_ohlcv failed: {e}")
+                self.save_log('ERROR', 'data', 'fetch_ohlcv', f"Binance fetch_ohlcv failed: {e}\n{traceback.format_exc()}")
                 self.save_log('DEBUG', 'data', traceback.format_exc())
                 raise
