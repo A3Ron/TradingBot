@@ -10,6 +10,8 @@ from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 from strategy import get_strategy
 import datetime
+import requests
+import traceback
 
 load_dotenv()
 
@@ -154,7 +156,6 @@ class DataFetcher:
         self.config = config
     def get_spot_symbols(self):
         """Lädt alle handelbaren Spot-Symbole von Binance."""
-        import requests
         try:
             url = "https://api.binance.com/api/v3/exchangeInfo"
             resp = requests.get(url, timeout=10)
@@ -381,7 +382,6 @@ class DataFetcher:
             session.close()
 
     def get_futures_symbols(self):
-        import requests
         try:
             url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
             resp = requests.get(url, timeout=10)
@@ -456,7 +456,6 @@ class DataFetcher:
 
     def fetch_ohlcv(self, limit=50):
         """Lädt OHLCV-Daten für das aktuelle Symbol/Timeframe."""
-        import requests
         if hasattr(self, 'exchange') and hasattr(self.exchange, 'urls') and self.exchange.urls['api']['public'].startswith('https://testnet.binance.vision'):
             self.save_log('INFO', 'data', 'Fetching OHLCV from Binance Spot Testnet via HTTP')
             base_url = 'https://testnet.binance.vision/api/v3/klines'
@@ -486,7 +485,6 @@ class DataFetcher:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 return df
             except Exception as e:
-                import traceback
                 self.save_log('ERROR', 'data', f"Binance fetch_ohlcv failed: {e}")
                 self.save_log('DEBUG', 'data', traceback.format_exc())
                 raise
