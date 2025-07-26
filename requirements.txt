@@ -1,8 +1,10 @@
 ccxt
 pandas
-pandas-ta
 pyyaml
 streamlit
-st_autorefresh
+streamlit-autorefresh
 psycopg2-binary
 sqlalchemy
+python-dotenv
+altair
+requests
