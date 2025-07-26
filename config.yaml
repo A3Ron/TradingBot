@@ -4,11 +4,11 @@ execution:
 logging:
   enabled: true
 postgres:
-  host: localhost
-  port: 5432
   database: tradingbot
-  user: postgres
+  host: localhost
   password: ${POSTGRES_PASSWORD}
+  port: 5432
+  user: postgres
 trading:
   futures: true
   futures_symbols:
@@ -16,16 +16,19 @@ trading:
   - ADAUSDT
   - SOLUSDT
   - BNBUSDT
-  - BTCUSDT
   - SUIUSDT
   - XRPUSDT
+  - ENAUSDT
+  - 1000PEPEUSDT
   stake_percent: 0.02
   symbols:
   - ETH/USDT
   - ADA/USDT
   - SOL/USDT
   - BNB/USDT
-  - BTC/USDT
   - SUI/USDT
   - XRP/USDT
+  - ENA/USDT
+  - MDT/USDT
+  - PEPE/USDT
   timeframe: 1m
