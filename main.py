@@ -131,7 +131,7 @@ def handle_spot_trades():
     for symbol in spot_symbols:
         dfetcher_log('DEBUG', 'main', f"[SPOT] Prüfe Symbol: {symbol}")
         try:
-            df = dfetcher.load_ohlcv_from_db(symbol, 'spot')
+            df = dfetcher.load_ohlcv(symbol, 'spot')
             if df.empty:
                 dfetcher_log('WARNING', 'main', f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue
@@ -196,7 +196,7 @@ def handle_futures_trades():
     for symbol in futures_symbols:
         dfetcher_log('DEBUG', 'main', f"[FUTURES] Prüfe Symbol: {symbol}")
         try:
-            df = dfetcher.load_ohlcv_from_db(symbol, 'futures')
+            df = dfetcher.load_ohlcv(symbol, 'futures')
             if df.empty:
                 dfetcher_log('WARNING', 'main', f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.")
                 continue

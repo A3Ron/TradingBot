@@ -96,7 +96,7 @@ PID_FILE = "bot.pid"
 MAIN_SCRIPT = "main.py"
 config = load_config(config_path)
 dfetcher = DataFetcher(config)
-trade_df = dfetcher.load_trades_from_db(limit=1000)
+trade_df = dfetcher.load_trades(limit=1000)
 
 # --- UI Code ---
 col_title, col_btn = st.columns([4,1])
@@ -457,7 +457,7 @@ with st.expander("Binance OHLCV Daten", expanded=False):
             st.session_state['selected_range'] = time_range_keys[1]
         selected_range = st.selectbox("Zeitraum", time_range_keys, key='selected_range')
         # OHLCV-Daten über DataFetcher laden
-        ohlcv_df = dfetcher.load_ohlcv_from_db(selected_symbol, market_type)
+        ohlcv_df = dfetcher.load_ohlcv(selected_symbol, market_type)
         if ohlcv_df is None or ohlcv_df.empty:
             st.info("Keine OHLCV-Daten für dieses Symbol/Markt-Typ geladen oder Datei ist leer.")
         else:

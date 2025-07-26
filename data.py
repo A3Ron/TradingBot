@@ -1,19 +1,24 @@
+# --- Imports ---
+import os
 import ccxt
 import pandas as pd
-import os
 import sqlalchemy
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, MetaData, Table
+from sqlalchemy import (
+    UUID, create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, MetaData, Table, JSON
+)
 from sqlalchemy.orm import sessionmaker
+from dotenv import load_dotenv
 from strategy import get_strategy
+import datetime
+
 load_dotenv()
 
+# --- DB Setup ---
 DB_HOST = "localhost"
 DB_PORT = 5432
 DB_NAME = "tradingbot"
 DB_USER = "postgres"
 DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
-
 PG_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 pg_engine = create_engine(PG_URL, echo=False, future=True)
 Session = sessionmaker(bind=pg_engine)
@@ -21,7 +26,8 @@ Session = sessionmaker(bind=pg_engine)
 def create_tables(engine):
     meta = MetaData()
     Table('ohlcv', meta,
-        Column('id', Integer, primary_key=True),
+        Column('id', UUID, primary_key=True),
+        Column('transaction_id', UUID, index=True),
         Column('symbol', String(32), index=True),
         Column('market_type', String(16), index=True),
         Column('timestamp', DateTime, index=True),
@@ -30,16 +36,19 @@ def create_tables(engine):
         Column('low', Float),
         Column('close', Float),
         Column('volume', Float),
-        Column('signal', Boolean),
+        Column('signal', Boolean, index=True),
         Column('signal_reason', Text),
         sqlalchemy.schema.UniqueConstraint('symbol', 'market_type', 'timestamp', name='uix_ohlcv')
     )
     Table('trades', meta,
-        Column('id', Integer, primary_key=True),
+        Column('id', UUID, primary_key=True),
+        Column('transaction_id', UUID, index=True),
+        Column('parent_trade_id', UUID, index=True),  # For linking trades
         Column('symbol', String(32), index=True),
         Column('market_type', String(16), index=True),
         Column('timestamp', DateTime, index=True),
         Column('side', String(8)),
+        Column('status', String(20)),
         Column('qty', Float),
         Column('price', Float),
         Column('fee', Float),
@@ -47,11 +56,33 @@ def create_tables(engine):
         Column('order_id', String(64)),
         Column('extra', Text)
     )
+    Table('symbols', meta,
+        Column('id', UUID, primary_key=True),
+        Column('symbols', JSON, index=True),
+        Column('symbol_type', String),
+        Column('selected', Boolean),
+        Column('base_asset', String(32)),
+        Column('quote_asset', String(32)),
+        Column('min_qty', Float),
+        Column('step_size', Float),
+        Column('min_notional', Float),
+        Column('tick_size', Float),
+        Column('status', String(32)),
+        Column('is_spot_trading_allowed', Boolean),
+        Column('is_margin_trading_allowed', Boolean),
+        Column('contract_type', String(32)),
+        Column('leverage', Integer),
+        Column('exchange', String(32)),
+        Column('created_at', DateTime),
+        Column('updated_at', DateTime),
+    )
     Table('logs', meta,
-        Column('id', Integer, primary_key=True),
+        Column('id', UUID, primary_key=True),
+        Column('transaction_id', UUID, index=True),
         Column('timestamp', DateTime, index=True),
-        Column('level', String(16)),
+        Column('level', String(16), index=True),
         Column('source', String(20)),
+        Column('method', String(20)),
         Column('message', Text)
     )
     meta.create_all(engine)
@@ -59,6 +90,66 @@ def create_tables(engine):
 create_tables(pg_engine)
 
 class DataFetcher:
+    def get_symbols(self, symbol_type):
+        table = self.get_symbols_cache_table()
+        session = self.get_session()
+        row = session.execute(sqlalchemy.select(table).where(table.c.symbol_type == symbol_type)).fetchone()
+        session.close()
+        if row:
+            return row.symbols, row.created_at, row.updated_at
+        return None, None, None
+
+    def set_symbols(self, symbol_type, symbols):
+        table = self.get_symbols_table()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        session = self.get_session()
+        row = session.execute(sqlalchemy.select(table).where(table.c.symbol_type == symbol_type)).fetchone()
+        if row:
+            session.execute(
+                table.update().where(table.c.symbol_type == symbol_type).values(
+                    symbols=symbols,
+                    updated_at=now
+                )
+            )
+        else:
+            session.execute(
+                table.insert().values(
+                    symbol_type=symbol_type,
+                    symbols=symbols,
+                    created_at=now,
+                    updated_at=now
+                )
+            )
+        session.commit()
+        session.close()
+
+    def get_or_update_symbols(self, symbol_type, fetch_func, max_age=24*3600):
+        symbols, created_at, updated_at = self.get_symbols(symbol_type)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        needs_update = False
+        if not symbols or not updated_at or (now - updated_at).total_seconds() > max_age:
+            needs_update = True
+        if needs_update:
+            symbols = fetch_func()
+            if symbols:
+                self.set_symbols(symbol_type, symbols)
+        return symbols, created_at, updated_at
+
+    def get_spot_and_futures_symbols(self, max_age=24*3600):
+        spot_symbols, spot_created, spot_updated = self.get_or_update_symbols('spot', self.get_spot_symbols, max_age)
+        futures_symbols, fut_created, fut_updated = self.get_or_update_symbols('futures', self.get_futures_symbols, max_age)
+        return {
+            'spot': {
+                'symbols': spot_symbols,
+                'created_at': spot_created,
+                'updated_at': spot_updated
+            },
+            'futures': {
+                'symbols': futures_symbols,
+                'created_at': fut_created,
+                'updated_at': fut_updated
+            }
+        }
     def __init__(self, config=None):
         self.config = config
     def get_spot_symbols(self):
@@ -84,7 +175,6 @@ class DataFetcher:
         
     def save_log(self, level, source, message):
         """Speichert einen Log-Eintrag in der Datenbank."""
-        from datetime import datetime
         session = self.get_session()
         try:
             session.execute(
@@ -93,7 +183,7 @@ class DataFetcher:
                     VALUES (:timestamp, :level, :source, :message)
                 """),
                 {
-                    'timestamp': datetime.utcnow(),
+                    'timestamp': datetime.datetime.now(datetime.timezone.utc),
                     'level': level,
                     'source': source,
                     'message': message
@@ -101,12 +191,12 @@ class DataFetcher:
             )
             session.commit()
         except Exception as e:
+            self.save_log('ERROR', 'data', f"Log DB-Save fehlgeschlagen: {e}")
             session.rollback()
-            # Optional: print(f"[ERROR] Log DB-Save fehlgeschlagen: {e}")
         finally:
             session.close()
 
-    def load_trades_from_db(self, limit=1000):
+    def load_trades(self, limit=1000):
         """Lädt Trades aus der Datenbank."""
         session = self.get_session()
         try:
@@ -130,7 +220,7 @@ class DataFetcher:
     def get_session(self):
         return Session()
     
-    def save_trade_to_db(self, trade_dict):
+    def save_trade(self, trade_dict):
         """Speichert einen Trade in der Datenbank."""
         session = self.get_session()
         try:
@@ -147,7 +237,7 @@ class DataFetcher:
 
 
 
-    def load_ohlcv_from_db(self, symbol, market_type, limit=500):
+    def load_ohlcv(self, symbol, market_type, limit=500):
         """Lädt OHLCV-Daten aus PostgreSQL."""
         session = self.get_session()
         try:
@@ -192,13 +282,13 @@ class DataFetcher:
         results = {}
         # Spot
         try:
-            spot = self._fetch_single_portfolio(market_type='spot')
+            spot = self.fetch_single_portfolio(market_type='spot')
         except Exception as e:
             self.save_log('ERROR', 'DataFetcher.fetch_portfolio', f"Spot-Portfolio konnte nicht geladen werden: {e}")
             spot = {'assets': [], 'total_value': 0.0, 'prices': {}}
         # Futures
         try:
-            futures = self._fetch_single_portfolio(market_type='futures')
+            futures = self.fetch_single_portfolio(market_type='futures')
         except Exception as e:
             self.save_log('ERROR', 'DataFetcher.fetch_portfolio', f"Futures-Portfolio konnte nicht geladen werden: {e}")
             futures = {'assets': [], 'total_value': 0.0, 'prices': {}}
@@ -208,7 +298,7 @@ class DataFetcher:
         results['total_value'] = total_value
         return results
 
-    def _fetch_single_portfolio(self, market_type='spot'):
+    def fetch_single_portfolio(self, market_type='spot'):
         # Initialisiere Exchange, falls nicht vorhanden
         if not hasattr(self, 'exchange') or self.exchange is None:
             self._init_exchange(market_type=market_type)

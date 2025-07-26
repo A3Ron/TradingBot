@@ -27,7 +27,7 @@ class BaseTrader:
             'outcome': 'closed',
             'exit_type': exit_type
         }
-        self.data.save_trade_to_db(trade_dict)
+        self.data.save_trade(trade_dict)
         self.data.save_log('INFO', 'trader', f"Trade geschlossen ({exit_type}): {trade_dict}")
 
     def send_telegram(self, message):
@@ -100,7 +100,7 @@ class SpotLongTrader(BaseTrader):
                 'order_id': 'testnet',
                 'extra': '[TESTNET]'
             }
-            self.data.save_trade_to_db(trade_dict)
+            self.data.save_trade(trade_dict)
             self.data.save_log('INFO', 'trader', f"Testnet-Trade gespeichert: {trade_dict}")
             return True
         try:
@@ -130,7 +130,7 @@ class SpotLongTrader(BaseTrader):
                 'order_id': str(order.get('id', '')) if isinstance(order, dict) else '',
                 'extra': str(order)
             }
-            self.data.save_trade_to_db(trade_dict)
+            self.data.save_trade(trade_dict)
             self.data.save_log('INFO', 'trader', f"Trade in DB gespeichert: {trade_dict}")
             return order
         except Exception as e:
@@ -238,7 +238,7 @@ class FuturesShortTrader(BaseTrader):
                 'order_id': 'testnet',
                 'extra': '[TESTNET]'
             }
-            self.data.save_trade_to_db(trade_dict)
+            self.data.save_trade(trade_dict)
             self.data.save_log('INFO', 'trader', f"Testnet-Trade gespeichert: {trade_dict}")
             return True
         try:
@@ -265,7 +265,7 @@ class FuturesShortTrader(BaseTrader):
                 'order_id': str(order.get('id', '')) if isinstance(order, dict) else '',
                 'extra': str(order)
             }
-            self.data.save_trade_to_db(trade_dict)
+            self.data.save_trade(trade_dict)
             self.data.save_log('INFO', 'trader', f"Trade in DB gespeichert: {trade_dict}")
             return order
         except Exception as e:
