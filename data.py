@@ -39,7 +39,9 @@ def create_tables(engine):
         Column('close', Float),
         Column('volume', Float),
         Column('signal', Boolean, index=True),
-        Column('signal_reason', Text),
+        Column('price_change', Float),
+        Column('volume_score', Float),
+        Column('rsi', Float),
         sqlalchemy.schema.UniqueConstraint('symbol', 'market_type', 'timestamp', name='uix_ohlcv')
     )
     Table('trades', meta,
@@ -92,66 +94,63 @@ def create_tables(engine):
 create_tables(pg_engine)
 
 class DataFetcher:
-    def get_symbols(self, symbol_type):
-        table = self.get_symbols_cache_table()
-        session = self.get_session()
-        row = session.execute(sqlalchemy.select(table).where(table.c.symbol_type == symbol_type)).fetchone()
-        session.close()
-        if row:
-            return row.symbols, row.created_at, row.updated_at
-        return None, None, None
+    def get_symbols_table(self):
+        meta = MetaData()
+        table = Table('symbols', meta, autoload_with=pg_engine)
+        return table
 
-    def set_symbols(self, symbol_type, symbols):
+    def get_all_symbols(self, symbol_type=None):
+        """Lädt alle Symbole aus der DB, optional gefiltert nach symbol_type."""
         table = self.get_symbols_table()
-        now = datetime.datetime.now(datetime.timezone.utc)
         session = self.get_session()
-        row = session.execute(sqlalchemy.select(table).where(table.c.symbol_type == symbol_type)).fetchone()
-        if row:
-            session.execute(
-                table.update().where(table.c.symbol_type == symbol_type).values(
-                    symbols=symbols,
-                    updated_at=now
-                )
-            )
-        else:
-            session.execute(
-                table.insert().values(
-                    symbol_type=symbol_type,
-                    symbols=symbols,
-                    created_at=now,
-                    updated_at=now
-                )
-            )
+        query = table.select()
+        if symbol_type:
+            query = query.where(table.c.symbol_type == symbol_type)
+        rows = session.execute(query).fetchall()
+        session.close()
+        return [dict(row) for row in rows]
+
+    def get_selected_symbols(self, symbol_type=None):
+        """Lädt alle als selected markierten Symbole aus der DB."""
+        table = self.get_symbols_table()
+        session = self.get_session()
+        query = table.select().where(table.c.selected == True)
+        if symbol_type:
+            query = query.where(table.c.symbol_type == symbol_type)
+        rows = session.execute(query).fetchall()
+        session.close()
+        return [dict(row) for row in rows]
+
+    def select_symbol(self, symbol, symbol_type, selected=True):
+        """Setzt das selected-Flag für ein Symbol (UI-Auswahl)."""
+        table = self.get_symbols_table()
+        session = self.get_session()
+        session.execute(
+            table.update().where(
+                (table.c.symbol_type == symbol_type) & (table.c.symbols.contains([symbol]))
+            ).values(selected=selected, updated_at=datetime.datetime.now(datetime.timezone.utc))
+        )
         session.commit()
         session.close()
 
-    def get_or_update_symbols(self, symbol_type, fetch_func, max_age=24*3600):
-        symbols, created_at, updated_at = self.get_symbols(symbol_type)
+    def upsert_symbol(self, symbol, symbol_type, **kwargs):
+        """Fügt ein Symbol ein oder aktualisiert es (z.B. nach Binance-Update)."""
+        table = self.get_symbols_table()
+        session = self.get_session()
         now = datetime.datetime.now(datetime.timezone.utc)
-        needs_update = False
-        if not symbols or not updated_at or (now - updated_at).total_seconds() > max_age:
-            needs_update = True
-        if needs_update:
-            symbols = fetch_func()
-            if symbols:
-                self.set_symbols(symbol_type, symbols)
-        return symbols, created_at, updated_at
-
-    def get_spot_and_futures_symbols(self, max_age=24*3600):
-        spot_symbols, spot_created, spot_updated = self.get_or_update_symbols('spot', self.get_spot_symbols, max_age)
-        futures_symbols, fut_created, fut_updated = self.get_or_update_symbols('futures', self.get_futures_symbols, max_age)
-        return {
-            'spot': {
-                'symbols': spot_symbols,
-                'created_at': spot_created,
-                'updated_at': spot_updated
-            },
-            'futures': {
-                'symbols': futures_symbols,
-                'created_at': fut_created,
-                'updated_at': fut_updated
-            }
-        }
+        row = session.execute(
+            table.select().where((table.c.symbol_type == symbol_type) & (table.c.symbols.contains([symbol])))
+        ).fetchone()
+        values = dict(symbols=[symbol], symbol_type=symbol_type, updated_at=now, **kwargs)
+        if row:
+            session.execute(
+                table.update().where(table.c.id == row.id).values(**values)
+            )
+        else:
+            values['created_at'] = now
+            session.execute(table.insert().values(**values))
+        session.commit()
+        session.close()
     def __init__(self, config=None):
         self.config = config
     def get_spot_symbols(self):
@@ -349,8 +348,12 @@ class DataFetcher:
             # Falls Strategie-Berechnung fehlschlägt, Spalten sicherstellen
             if 'signal' not in df.columns:
                 df['signal'] = False
-            if 'signal_reason' not in df.columns:
-                df['signal_reason'] = ''
+            if 'price_change' not in df.columns:
+                df['price_change'] = None
+            if 'volume_score' not in df.columns:
+                df['volume_score'] = None
+            if 'rsi' not in df.columns:
+                df['rsi'] = None
         session = self.get_session()
         try:
             for _, row in df.iterrows():
@@ -360,20 +363,32 @@ class DataFetcher:
                     """),
                     dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'])
                 ).first()
+                update_dict = dict(
+                    id=exists.id if exists else None,
+                    open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'],
+                    signal=bool(row.get('signal', False)),
+                    price_change=row.get('price_change', None),
+                    volume_score=row.get('volume_score', None),
+                    rsi=row.get('rsi', None)
+                )
+                insert_dict = dict(
+                    symbol=symbol, market_type=market_type, timestamp=row['timestamp'],
+                    open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'],
+                    signal=bool(row.get('signal', False)),
+                    price_change=row.get('price_change', None),
+                    volume_score=row.get('volume_score', None),
+                    rsi=row.get('rsi', None)
+                )
                 if exists:
                     session.execute(sqlalchemy.text("""
-                        UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume, signal=:signal, signal_reason=:signal_reason
+                        UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume, signal=:signal, price_change=:price_change, volume_score=:volume_score, rsi=:rsi
                         WHERE id=:id
-                    """),
-                        dict(id=exists.id, open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'], signal=bool(row.get('signal', False)), signal_reason=str(row.get('signal_reason', '')))
-                    )
+                    """), update_dict)
                 else:
                     session.execute(sqlalchemy.text("""
-                        INSERT INTO ohlcv (symbol, market_type, timestamp, open, high, low, close, volume, signal, signal_reason)
-                        VALUES (:symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume, :signal, :signal_reason)
-                    """),
-                        dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'], open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'], signal=bool(row.get('signal', False)), signal_reason=str(row.get('signal_reason', '')))
-                    )
+                        INSERT INTO ohlcv (symbol, market_type, timestamp, open, high, low, close, volume, signal, price_change, volume_score, rsi)
+                        VALUES (:symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume, :signal, :price_change, :volume_score, :rsi)
+                    """), insert_dict)
             session.commit()
         except Exception as e:
             session.rollback()
