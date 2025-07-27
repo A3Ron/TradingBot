@@ -101,6 +101,9 @@ class SpotLongTrader(BaseTrader):
                 return
             self.data.save_log('DEBUG', 'SpotLongTrader', 'handle_trades', f"[SPOT] OHLCV-Daten für {symbol} geladen. Zeilen: {len(df)}", transaction_id)
             df = strategy.get_signals_and_reasons(df)
+            for col in ['signal', 'price_change', 'volume_score', 'rsi']:
+                if col not in df.columns:
+                    df[col] = None
             candle_time = df['timestamp'].iloc[-1]
             if self.last_candle_time is None or candle_time > self.last_candle_time:
                 self.last_candle_time = candle_time
@@ -306,7 +309,11 @@ class FuturesShortTrader(BaseTrader):
                 self.data.save_log('WARNING', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.", transaction_id)
                 return
             self.data.save_log('DEBUG', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] OHLCV-Daten für {symbol} geladen. Zeilen: {len(df)}", transaction_id)
+            # Ensure required columns for save_ohlcv
             df = strategy.get_signals_and_reasons(df)
+            for col in ['signal', 'price_change', 'volume_score', 'rsi']:
+                if col not in df.columns:
+                    df[col] = None
             candle_time = df['timestamp'].iloc[-1]
             if self.last_candle_time is None or candle_time > self.last_candle_time:
                 self.last_candle_time = candle_time

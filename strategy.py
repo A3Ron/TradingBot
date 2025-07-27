@@ -80,36 +80,13 @@ class SpotLongStrategy(BaseStrategy):
         df['price_change'] = df['close'].pct_change(periods=self.price_change_periods)
         df['vol_mean'] = df['volume'].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
         df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
-        signal_mask_long = (
+        df['volume_score'] = df['volume'] / df['vol_mean']
+        df['signal'] = (
             (df['price_change'] > self.price_change_pct) &
             (df['volume'] > self.volume_mult * df['vol_mean']) &
             (df['rsi'] > self.rsi_long)
         )
-        reasons = []
-        prev_rsi = df['rsi'].shift(1)
-        for i, row in df.iterrows():
-            # Use nan for missing values to allow numeric formatting
-            price_chg = row['price_change'] * 100 if pd.notnull(row['price_change']) else float('nan')
-            vol_mult = (row['volume'] / row['vol_mean']) if pd.notnull(row['vol_mean']) and row['vol_mean'] != 0 else float('nan')
-            rsi_val = row['rsi'] if pd.notnull(row['rsi']) else float('nan')
-            rsi_delta = (row['rsi'] - prev_rsi[i]) if pd.notnull(row['rsi']) and pd.notnull(prev_rsi[i]) else float('nan')
-            if signal_mask_long.loc[i]:
-                reasons.append('Long Signal: Preis > +{:.2f}% (Schwelle: {:.2f}%), Vol > {:.2f}x (Schwelle: {:.2f}x), RSI > {:.2f} (Schwelle: {})'.format(
-                    price_chg, self.price_change_pct*100, vol_mult, self.volume_mult, rsi_val, self.rsi_long))
-            else:
-                r = []
-                if not (row['price_change'] > self.price_change_pct):
-                    r.append(f"Preisänderung zu gering: {price_chg:.2f}% < {self.price_change_pct*100:.2f}%")
-                if not (row['volume'] > self.volume_mult * row['vol_mean']):
-                    r.append('Volumen nicht hoch genug ({:.2f}x / Schwelle: {:.2f}x)'.format(vol_mult if vol_mult is not None else float('nan'), self.volume_mult))
-                if not (row['rsi'] > self.rsi_long):
-                    r.append('RSI nicht hoch genug (Long) ({:.2f} / Schwelle: {})'.format(rsi_val if rsi_val is not None else float('nan'), self.rsi_long))
-                if rsi_delta is not None:
-                    r.append('RSI-Delta: {:.2f}'.format(rsi_delta))
-                reasons.append(', '.join(r) if r else 'No Signal')
-        df['signal'] = signal_mask_long
-        df['signal_reason'] = reasons
-        return df
+        return df[['signal', 'price_change', 'volume_score', 'rsi']]
 
 class FuturesShortStrategy(BaseStrategy):
     """
@@ -144,33 +121,10 @@ class FuturesShortStrategy(BaseStrategy):
         df['price_change'] = df['close'].pct_change(periods=self.price_change_periods)
         df['vol_mean'] = df['volume'].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
         df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
-        signal_mask_short = (
+        df['volume_score'] = df['volume'] / df['vol_mean']
+        df['signal'] = (
             (df['price_change'] < -self.price_change_pct) &
             (df['volume'] > self.volume_mult * df['vol_mean']) &
             (df['rsi'] < self.rsi_short)
         )
-        reasons = []
-        prev_rsi = df['rsi'].shift(1)
-        for i, row in df.iterrows():
-            # Use nan for missing values to allow numeric formatting
-            price_chg = row['price_change'] * 100 if pd.notnull(row['price_change']) else float('nan')
-            vol_mult = (row['volume'] / row['vol_mean']) if pd.notnull(row['vol_mean']) and row['vol_mean'] != 0 else float('nan')
-            rsi_val = row['rsi'] if pd.notnull(row['rsi']) else float('nan')
-            rsi_delta = (row['rsi'] - prev_rsi[i]) if pd.notnull(row['rsi']) and pd.notnull(prev_rsi[i]) else float('nan')
-            if signal_mask_short.loc[i]:
-                reasons.append('Short Signal: Preis < -{:.2f}% (Schwelle: -{:.2f}%), Vol > {:.2f}x (Schwelle: {:.2f}x), RSI < {:.2f} (Schwelle: {})'.format(
-                    price_chg, self.price_change_pct*100, vol_mult, self.volume_mult, rsi_val, self.rsi_short))
-            else:
-                r = []
-                if not (row['price_change'] < -self.price_change_pct):
-                    r.append(f"Preisfall zu gering: {price_chg:.2f}% > -{self.price_change_pct*100:.2f}%")
-                if not (row['volume'] > self.volume_mult * row['vol_mean']):
-                    r.append('Volumen nicht hoch genug ({:.2f}x / Schwelle: {:.2f}x)'.format(vol_mult if vol_mult is not None else float('nan'), self.volume_mult))
-                if not (row['rsi'] < self.rsi_short):
-                    r.append('RSI nicht tief genug (Short) ({:.2f} / Schwelle: {})'.format(rsi_val if rsi_val is not None else float('nan'), self.rsi_short))
-                if rsi_delta is not None:
-                    r.append('RSI-Delta: {:.2f}'.format(rsi_delta))
-                reasons.append(', '.join(r) if r else 'No Signal')
-        df['signal'] = signal_mask_short
-        df['signal_reason'] = reasons
-        return df
+        return df[['signal', 'price_change', 'volume_score', 'rsi']]

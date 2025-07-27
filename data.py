@@ -8,7 +8,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
-from strategy import get_strategy
 import datetime
 import requests
 import traceback
@@ -392,23 +391,11 @@ class DataFetcher:
         return {'assets': assets, 'total_value': total_value, 'prices': prices}
     
     def save_ohlcv(self, df: pd.DataFrame, symbol: str, market_type: str, transaction_id: str) -> None:
-        """Berechnet Signale und speichert OHLCV-Daten in PostgreSQL (ersetzt/fügt ein). transaction_id ist Pflicht."""
+        """Speichert OHLCV-Basisdaten (ohne Signalspalten) in PostgreSQL. transaction_id ist Pflicht."""
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für save_ohlcv")
         if df.empty:
             return
-        # Signale und Gründe werden IMMER vor dem Speichern berechnet
-        try:
-            strategies = get_strategy(self.config)
-            strat = strategies['spot_long'] if market_type == 'spot' else strategies['futures_short']
-            df = strat.get_signals_and_reasons(df)
-        except Exception as e:
-            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV Signalberechnung fehlgeschlagen: {e}", transaction_id)
-            # Falls Strategie-Berechnung fehlschlägt, Spalten sicherstellen
-            required_cols = {'signal': False, 'price_change': None, 'volume_score': None, 'rsi': None}
-            for col, default in required_cols.items():
-                if col not in df.columns:
-                    df[col] = default
         session = self.get_session()
         try:
             for _, row in df.iterrows():
@@ -420,27 +407,57 @@ class DataFetcher:
                 ).first()
                 # Generate UUID for new row if needed
                 if exists:
-                    update_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume', 'signal', 'price_change', 'volume_score', 'rsi']}
+                    update_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume']}
                     update_dict['id'] = exists.id
                     session.execute(sqlalchemy.text("""
-                        UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume, signal=:signal, price_change=:price_change, volume_score=:volume_score, rsi=:rsi
+                        UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume
                         WHERE id=:id
                     """), update_dict)
                 else:
-                    insert_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume', 'signal', 'price_change', 'volume_score', 'rsi']}
+                    insert_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume']}
                     insert_dict['symbol'] = symbol
                     insert_dict['market_type'] = market_type
                     insert_dict['timestamp'] = row['timestamp']
                     insert_dict['id'] = str(uuid.uuid4())
                     insert_dict['transaction_id'] = transaction_id
                     session.execute(sqlalchemy.text("""
-                        INSERT INTO ohlcv (id, transaction_id, symbol, market_type, timestamp, open, high, low, close, volume, signal, price_change, volume_score, rsi)
-                        VALUES (:id, :transaction_id, :symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume, :signal, :price_change, :volume_score, :rsi)
+                        INSERT INTO ohlcv (id, transaction_id, symbol, market_type, timestamp, open, high, low, close, volume)
+                        VALUES (:id, :transaction_id, :symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume)
                     """), insert_dict)
             session.commit()
         except Exception as e:
             session.rollback()
             self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV DB-Save fehlgeschlagen: {e}", transaction_id)
+        finally:
+            session.close()
+
+    def save_signals(self, df: pd.DataFrame, symbol: str, market_type: str, transaction_id: str) -> None:
+        """Speichert Signalspalten (signal, price_change, volume_score, rsi) für vorhandene OHLCV-Datensätze. transaction_id ist Pflicht."""
+        if not transaction_id:
+            raise ValueError("transaction_id ist Pflicht für save_signals")
+        if df.empty:
+            return
+        session = self.get_session()
+        try:
+            for _, row in df.iterrows():
+                # Update only if row exists
+                exists = session.execute(
+                    sqlalchemy.text("""
+                        SELECT id FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type AND timestamp=:timestamp
+                    """),
+                    dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'])
+                ).first()
+                if exists:
+                    update_dict = {k: row.get(k, None) for k in ['signal', 'price_change', 'volume_score', 'rsi']}
+                    update_dict['id'] = exists.id
+                    session.execute(sqlalchemy.text("""
+                        UPDATE ohlcv SET signal=:signal, price_change=:price_change, volume_score=:volume_score, rsi=:rsi
+                        WHERE id=:id
+                    """), update_dict)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            self.save_log('ERROR', 'data', 'save_signals', f"Signal-Update DB-Save fehlgeschlagen: {e}", transaction_id)
         finally:
             session.close()
 
@@ -497,8 +514,9 @@ class DataFetcher:
                 'enableRateLimit': True,
                 'options': options,
             })
-    def fetch_and_save_ohlcv_for_symbols(self, symbols: list, market_type: str, transaction_id: str, limit: int = 50) -> None:
-        """Lädt und speichert OHLCV-Daten für eine Liste von Symbolen. transaction_id ist Pflicht."""
+            
+    def fetch_and_save_ohlcv(self, symbols: list, market_type: str, transaction_id: str, limit: int = 50) -> None:
+        """Lädt und speichert OHLCV-Basisdaten für eine Liste von Symbolen. transaction_id ist Pflicht."""
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für fetch_and_save_ohlcv_for_symbols")
         if self.config and 'trading' in self.config and 'timeframe' in self.config['trading']:
