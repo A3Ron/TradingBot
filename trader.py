@@ -1,10 +1,114 @@
 import ccxt
 import os
 import pandas as pd
+import traceback
+from typing import Optional, Dict, Any
 from data import DataFetcher
 
+# Magic constants
+SPOT = 'spot'
+FUTURES = 'futures'
+TESTNET = 'testnet'
+LONG = 'long'
+SHORT = 'short'
+LOG_DEBUG = 'DEBUG'
+LOG_INFO = 'INFO'
+LOG_WARN = 'WARNING'
+LOG_ERROR = 'ERROR'
+COL_CLOSE = 'close'
+COL_VOLUME = 'volume'
+COL_TIMESTAMP = 'timestamp'
+
 class BaseTrader:
-    def __init__(self, config, symbol, data_fetcher=None, exchange=None):
+    def evaluate_and_store_signal(self, strategy, df: pd.DataFrame, market_type: str, transaction_id: str) -> Optional[dict]:
+        """
+        Evaluates the strategy signal for the latest candle, stores the result, and returns a candidate dict if a trade signal is present.
+        """
+        if df.empty:
+            self.data.save_log(LOG_WARN, self.__class__.__name__, 'evaluate_and_store_signal', f"[{market_type.upper()}] Keine OHLCV-Daten für {self.symbol} geladen oder Datei fehlt.", transaction_id)
+            return None
+        self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_and_store_signal', f"[{market_type.upper()}] OHLCV-Daten für {self.symbol} geladen. Zeilen: {len(df)}", transaction_id)
+        candle_time = df[COL_TIMESTAMP].iloc[-1]
+        if self.last_candle_time is None or candle_time > self.last_candle_time:
+            self.last_candle_time = candle_time
+            eval_result = strategy.evaluate_signal(df)
+            # Speichere das aktuelle Signal gezielt für die letzte Kerze
+            signal_row = df.iloc[[-1]].copy()
+            for key in ['signal', 'price_change', 'volume_score', 'rsi']:
+                val = eval_result.get(key)
+                signal_row[key] = val
+            self.data.save_signals(signal_row, self.symbol, market_type, transaction_id)
+            if eval_result.get('trade_signal'):
+                self.data.save_log(LOG_INFO, self.__class__.__name__, 'evaluate_and_store_signal', f"[{market_type.upper()}] Signal erkannt für {self.symbol}: {eval_result}", transaction_id)
+                vol_score = eval_result.get('volume_score', 0) or 0
+                return {
+                    'symbol': self.symbol,
+                    'signal': eval_result,
+                    'vol_score': vol_score,
+                    'df': df
+                }
+            else:
+                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_and_store_signal', f"[{market_type.upper()}] Kein Signal für {self.symbol} in aktueller Kerze.", transaction_id)
+                return None
+        else:
+            self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_and_store_signal', f"[{market_type.upper()}] Keine neue Kerze für {self.symbol}.", transaction_id)
+            return None
+
+    def handle_open_trade(self, strategy, transaction_id: str, market_type: str, side: str) -> Optional[str]:
+        """
+        Monitors and manages an open trade. Returns exit_type if trade is closed, else None.
+        """
+        if self.open_trade is None:
+            return None
+        symbol = self.open_trade['symbol']
+        df = self.open_trade['df']
+        self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_open_trade', f"[{market_type.upper()}] Überwache offenen Trade für {symbol}.", transaction_id)
+        exit_type = self.monitor_trade(self.open_trade['signal'], df, strategy, transaction_id)
+        if exit_type:
+            self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_open_trade', f"[MAIN] {market_type.capitalize()}-{side.capitalize()}-Trade für {symbol} geschlossen: {exit_type}", transaction_id)
+            self.send_telegram(f"{market_type.capitalize()}-{side.capitalize()}-Trade für {symbol} geschlossen: {exit_type}")
+            self.open_trade = None
+            return exit_type
+        else:
+            self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_open_trade', f"[{market_type.upper()}] Trade für {symbol} bleibt offen.", transaction_id)
+            return None
+
+    def handle_new_trade_candidate(self, candidate: dict, strategy, transaction_id: str, market_type: str, side: str, execute_trade_method) -> None:
+        """
+        Handles a new trade candidate: executes the trade and manages state/logging.
+        """
+        symbol = candidate['symbol']
+        signal = candidate['signal']
+        df = candidate['df']
+        self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[{market_type.upper()}] Führe Trade aus für {symbol} mit Vol-Score {candidate['vol_score']}", transaction_id)
+        try:
+            # Erzeuge ein Dummy-Objekt mit Attributen für execute_trade
+            class SignalObj:
+                pass
+            signal_obj = SignalObj()
+            for k, v in signal.items():
+                setattr(signal_obj, k, v)
+            result = execute_trade_method(signal_obj, transaction_id)
+            self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[MAIN] {market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol}: {result}", transaction_id)
+            if result:
+                self.send_telegram(f"{market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol} Entry: {signal.get('entry')} SL: {signal.get('stop_loss')} TP: {signal.get('take_profit')} Vol: {signal.get('volume')}")
+                self.open_trade = candidate
+            else:
+                self.data.save_log(LOG_WARN, self.__class__.__name__, 'handle_new_trade_candidate', f"[{market_type.upper()}] Trade für {symbol} wurde nicht ausgeführt (execute_trade lieferte None).", transaction_id)
+        except Exception as e:
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_new_trade_candidate', f"Fehler beim Ausführen des {market_type.capitalize()}-{side.capitalize()}-Trades für {symbol}: {e}", transaction_id)
+
+    """
+    Basisklasse für Trader-Logik (Spot/Futures). Verwaltet Symbol, Konfiguration, Exchange, Logging und Telegram.
+    """
+    def __init__(self, config: dict, symbol: str, data_fetcher: Optional[DataFetcher] = None, exchange: Optional[Any] = None):
+        """
+        Args:
+            config: Konfigurations-Dictionary
+            symbol: Handelssymbol (z.B. 'BTC/USDT')
+            data_fetcher: Optionaler DataFetcher
+            exchange: Optionales Exchange-Objekt
+        """
         self.config = config
         self.symbol = symbol
         self.mode = config['execution']['mode']
@@ -12,10 +116,13 @@ class BaseTrader:
         self.telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
         self.data = data_fetcher if data_fetcher is not None else DataFetcher(self.config)
         self.exchange = exchange if exchange is not None else None
-        self.open_trade = None
-        self.last_candle_time = None
+        self.open_trade: Optional[Dict[str, Any]] = None
+        self.last_candle_time: Optional[pd.Timestamp] = None
 
-    def close_trade(self, market_type, side, qty, price, exit_type, transaction_id):
+    def close_trade(self, market_type: str, side: str, qty: float, price: float, exit_type: str, transaction_id: str) -> None:
+        """
+        Schließt einen Trade und loggt das Ergebnis.
+        """
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für close_trade")
         trade_dict = {
@@ -33,9 +140,12 @@ class BaseTrader:
             'exit_type': exit_type
         }
         self.data.save_trade(trade_dict, transaction_id)
-        self.data.save_log('INFO', 'trader', 'close_trade', f"Trade geschlossen ({exit_type}): {trade_dict}", transaction_id)
+        self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_type}): {trade_dict}", transaction_id)
 
-    def send_telegram(self, message):
+    def send_telegram(self, message: str) -> None:
+        """
+        Sendet eine Telegram-Nachricht, falls Token und Chat-ID gesetzt sind.
+        """
         if not self.telegram_token or not self.telegram_chat_id:
             return
         import requests
@@ -44,10 +154,20 @@ class BaseTrader:
         try:
             requests.post(url, data=data)
         except Exception as e:
-            self.data.save_log('WARNING', 'trader', f"Telegram error: {e}")
+            self.data.save_log(LOG_WARN, 'trader', f"Telegram error: {e}\n{traceback.format_exc()}")
 
-    def get_trade_volume(self, signal):
+    def get_trade_volume(self, signal: Any) -> float:
+        """
+        Berechnet das Handelsvolumen basierend auf Risiko und verfügbarem Guthaben.
+        Args:
+            signal: Signal-Objekt mit entry, stop_loss, volume
+        Returns:
+            float: Handelsvolumen
+        """
         try:
+            if signal.entry is None or signal.stop_loss is None or signal.volume is None:
+                self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"Signalwerte fehlen: entry={signal.entry}, stop_loss={signal.stop_loss}, volume={signal.volume}")
+                return 0.0
             balance = self.exchange.fetch_balance()
             base = self.symbol.split('/')[0]
             quote = self.symbol.split('/')[1]
@@ -56,13 +176,13 @@ class BaseTrader:
             max_loss = available * risk_percent
             risk_per_unit = abs(signal.entry - signal.stop_loss)
             if risk_per_unit == 0:
-                self.data.save_log('WARNING', 'trader', "Stop-Loss gleich Entry, Volumen auf Minimum gesetzt.")
+                self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', "Stop-Loss gleich Entry, Volumen auf Minimum gesetzt.")
                 return min(available, signal.volume)
             volume = max_loss / risk_per_unit
             return min(volume, signal.volume, available)
         except Exception as e:
-            self.data.save_log('WARNING', 'trader', f"Konnte Guthaben nicht abrufen, nutze Signal-Volumen: {e}")
-            return signal.volume
+            self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"Konnte Guthaben nicht abrufen, nutze Signal-Volumen: {e}\n{traceback.format_exc()}")
+            return signal.volume if hasattr(signal, 'volume') and signal.volume is not None else 0.0
 
 class SpotLongTrader(BaseTrader):
     def __init__(self, config, symbol, data_fetcher=None, exchange=None):
@@ -71,7 +191,7 @@ class SpotLongTrader(BaseTrader):
             api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
             api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')
             if not api_key or not api_secret:
-                self.data.save_log('ERROR', 'trader', 'Binance API-Key oder Secret fehlt!')
+                self.data.save_log(LOG_ERROR, 'trader', 'Binance API-Key oder Secret fehlt!')
                 raise ValueError('Binance API-Key oder Secret fehlt!')
             try:
                 self.exchange = ccxt.binance({
@@ -81,95 +201,41 @@ class SpotLongTrader(BaseTrader):
                     'options': {'defaultType': 'spot'}
                 })
             except Exception as e:
-                self.data.save_log('ERROR', 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
+                self.data.save_log(LOG_ERROR, 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
                 raise
 
     def handle_trades(self, strategy, transaction_id):
+        """
+        Handles the trading loop: evaluates signals, manages open trades, and executes new trades for spot long.
+        """
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für handle_trades")
-        symbol = self.symbol
-        self.data.save_log('DEBUG', 'SpotLongTrader', 'handle_trades', f"[SPOT] Prüfe Symbol: {symbol}", transaction_id)
+        self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[SPOT] Prüfe Symbol: {self.symbol}", transaction_id)
         try:
-            df = self.data.load_ohlcv(symbol, 'spot')
-            if df.empty:
-                self.data.save_log('WARNING', 'SpotLongTrader', 'handle_trades', f"[SPOT] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.", transaction_id)
-                return
-            self.data.save_log('DEBUG', 'SpotLongTrader', 'handle_trades', f"[SPOT] OHLCV-Daten für {symbol} geladen. Zeilen: {len(df)}", transaction_id)
-            candle_time = df['timestamp'].iloc[-1]
-            if self.last_candle_time is None or candle_time > self.last_candle_time:
-                self.last_candle_time = candle_time
-                eval_result = strategy.evaluate_signal(df)
-                # Speichere das aktuelle Signal gezielt für die letzte Kerze
-                signal_row = df.iloc[[-1]].copy()
-                for key in ['signal', 'price_change', 'volume_score', 'rsi']:
-                    val = eval_result.get(key)
-                    signal_row[key] = val
-                self.data.save_signals(signal_row, symbol, 'spot', transaction_id)
-                if eval_result.get('trade_signal'):
-                    self.data.save_log('INFO', 'SpotLongTrader', 'handle_trades', f"[SPOT] Signal erkannt für {symbol}: {eval_result}", transaction_id)
-                    vol_score = eval_result.get('volume_score', 0) or 0
-                    candidate = {
-                        'symbol': symbol,
-                        'signal': eval_result,
-                        'vol_score': vol_score,
-                        'df': df
-                    }
-                else:
-                    self.data.save_log('DEBUG', 'SpotLongTrader', 'handle_trades', f"[SPOT] Kein Signal für {symbol} in aktueller Kerze.", transaction_id)
-                    candidate = None
-            else:
-                self.data.save_log('DEBUG', 'SpotLongTrader', 'handle_trades', f"[SPOT] Keine neue Kerze für {symbol}.", transaction_id)
-                candidate = None
+            df = self.data.load_ohlcv(self.symbol, SPOT)
+            candidate = self.evaluate_and_store_signal(strategy, df, SPOT, transaction_id)
         except Exception as e:
-            self.data.save_log('ERROR', 'SpotLongTrader', 'handle_trades', f"[SPOT] Fehler beim Laden/Verarbeiten der OHLCV-Daten für {symbol}: {e}", transaction_id)
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_trades', f"[SPOT] Fehler beim Laden/Verarbeiten der OHLCV-Daten für {self.symbol}: {e}", transaction_id)
             candidate = None
 
         if self.open_trade is not None:
-            symbol = self.open_trade['symbol']
-            df = self.open_trade['df']
-            self.data.save_log('DEBUG', 'SpotLongTrader', 'handle_trades', f"[SPOT] Überwache offenen Trade für {symbol}.", transaction_id)
-            exit_type = self.monitor_trade(self.open_trade['signal'], df, strategy, transaction_id)
-            if exit_type:
-                self.data.save_log('INFO', 'SpotLongTrader', 'handle_trades', f"[MAIN] Spot-Trade für {symbol} geschlossen: {exit_type}", transaction_id)
-                self.send_telegram(f"Spot-Trade für {symbol} geschlossen: {exit_type}")
-                self.open_trade = None
-            else:
-                self.data.save_log('DEBUG', 'SpotLongTrader', 'handle_trades', f"[SPOT] Trade für {symbol} bleibt offen.", transaction_id)
+            self.handle_open_trade(strategy, transaction_id, SPOT, LONG)
         else:
             if candidate:
-                symbol = candidate['symbol']
-                signal = candidate['signal']
-                df = candidate['df']
-                self.data.save_log('INFO', 'SpotLongTrader', 'handle_trades', f"[SPOT] Führe Trade aus für {symbol} mit Vol-Score {candidate['vol_score']}", transaction_id)
-                try:
-                    # Erzeuge ein Dummy-Objekt mit Attributen für execute_trade
-                    class SignalObj:
-                        pass
-                    signal_obj = SignalObj()
-                    for k, v in signal.items():
-                        setattr(signal_obj, k, v)
-                    result = self.execute_trade(signal_obj, transaction_id)
-                    self.data.save_log('INFO', 'SpotLongTrader', 'handle_trades', f"[MAIN] Spot-Trade ausgeführt für {symbol}: {result}", transaction_id)
-                    if result:
-                        self.send_telegram(f"Spot-Trade ausgeführt für {symbol} Entry: {signal.get('entry')} SL: {signal.get('stop_loss')} TP: {signal.get('take_profit')} Vol: {signal.get('volume')}")
-                        self.open_trade = candidate
-                    else:
-                        self.data.save_log('WARNING', 'SpotLongTrader', 'handle_trades', f"[SPOT] Trade für {symbol} wurde nicht ausgeführt (execute_trade lieferte None).", transaction_id)
-                except Exception as e:
-                    self.data.save_log('ERROR', 'SpotLongTrader', 'handle_trades', f"Fehler beim Ausführen des Spot-Trades für {symbol}: {e}", transaction_id)
+                self.handle_new_trade_candidate(candidate, strategy, transaction_id, SPOT, LONG, self.execute_trade)
             else:
-                self.data.save_log('DEBUG', 'SpotLongTrader', 'handle_trades', f"[SPOT] Kein Kandidat für neuen Trade gefunden.", transaction_id)
+                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[SPOT] Kein Kandidat für neuen Trade gefunden.", transaction_id)
     
     def execute_trade(self, signal, transaction_id):
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für execute_trade")
         # Determine base volume by risk percentage logic
-        self.data.save_log('DEBUG', 'trader', 'execute_trade', f"Starte execute_trade für {self.symbol} (LONG). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}", transaction_id)
+        self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Starte execute_trade für {self.symbol} (LONG). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}", transaction_id)
         volume = self.get_trade_volume(signal)
-        self.data.save_log('DEBUG', 'trader', 'execute_trade', f"Berechnetes Volumen für {self.symbol}: {volume}", transaction_id)
+        self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Berechnetes Volumen für {self.symbol}: {volume}", transaction_id)
         msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
-            self.data.save_log('INFO', 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
             self.send_telegram(f"[TESTNET] {msg}")
             # Testnet-Trade als Dummy in DB speichern
             trade_dict = {
@@ -185,21 +251,21 @@ class SpotLongTrader(BaseTrader):
                 'extra': '[TESTNET]'
             }
             self.data.save_trade(trade_dict, transaction_id)
-            self.data.save_log('INFO', 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_dict}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_dict}", transaction_id)
             return True
         try:
-            self.data.save_log('DEBUG', 'trader', 'execute_trade', f"Sende Market-BUY Order für {self.symbol}...", transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Sende Market-BUY Order für {self.symbol}...", transaction_id)
             ticker = self.exchange.fetch_ticker(self.symbol)
             price = ticker.get('last') or ticker.get('close')
             if price:
                 quote_qty = volume * price
             else:
                 quote_qty = volume
-            self.data.save_log('DEBUG', 'trader', 'execute_trade', f"Nutze quoteOrderQty={quote_qty} für {self.symbol}", transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Nutze quoteOrderQty={quote_qty} für {self.symbol}", transaction_id)
             order = self.exchange.create_order(
                 self.symbol, 'MARKET', 'BUY', None, None, {'quoteOrderQty': quote_qty}
             )
-            self.data.save_log('INFO', 'trader', 'execute_trade', f"Order ausgeführt: {order}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Order ausgeführt: {order}", transaction_id)
             self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             # Trade in DB speichern
             trade_dict = {
@@ -215,10 +281,10 @@ class SpotLongTrader(BaseTrader):
                 'extra': str(order)
             }
             self.data.save_trade(trade_dict, transaction_id)
-            self.data.save_log('INFO', 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_dict}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_dict}", transaction_id)
             return order
         except Exception as e:
-            self.data.save_log('ERROR', 'trader', 'execute_trade', f"Trade fehlgeschlagen: {e}", transaction_id)
+            self.data.save_log(LOG_ERROR, 'trader', 'execute_trade', f"Trade fehlgeschlagen: {e}", transaction_id)
             self.send_telegram(f"LONG Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
@@ -228,43 +294,43 @@ class SpotLongTrader(BaseTrader):
         current_price = df['close'].iloc[-1]
         # Take-Profit Exit
         if current_price >= trade.take_profit:
-            self.data.save_log('INFO', 'trader', 'monitor_trade', f"Take-Profit erreicht: {current_price} >= {trade.take_profit}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Take-Profit erreicht: {current_price} >= {trade.take_profit}", transaction_id)
             self.send_telegram(f"Take-Profit erreicht: {current_price} >= {trade.take_profit}")
             try:
                 order = self.exchange.create_order(
                     self.symbol, 'MARKET', 'SELL', trade.volume
                 )
-                self.data.save_log('INFO', 'trader', 'monitor_trade', f"Take-Profit SELL ausgeführt: {order}", transaction_id)
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Take-Profit SELL ausgeführt: {order}", transaction_id)
             except Exception as e:
-                self.data.save_log('ERROR', 'trader', 'monitor_trade', f"Fehler beim Take-Profit SELL: {e}", transaction_id)
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Take-Profit SELL: {e}", transaction_id)
                 self.send_telegram(f"Fehler beim Take-Profit SELL: {e}")
             self.close_trade('spot', 'long', trade.volume, current_price, 'take_profit', transaction_id)
             return "take_profit"
         # Stop-Loss Exit
         if current_price <= trade.stop_loss:
-            self.data.save_log('INFO', 'trader', 'monitor_trade', f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}", transaction_id)
             self.send_telegram(f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}")
             try:
                 order = self.exchange.create_order(
                     self.symbol, 'MARKET', 'SELL', trade.volume
                 )
-                self.data.save_log('INFO', 'trader', 'monitor_trade', f"Stop-Loss SELL ausgeführt: {order}", transaction_id)
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Stop-Loss SELL ausgeführt: {order}", transaction_id)
             except Exception as e:
-                self.data.save_log('ERROR', 'trader', 'monitor_trade', f"Fehler beim Stop-Loss SELL: {e}", transaction_id)
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Stop-Loss SELL: {e}", transaction_id)
                 self.send_telegram(f"Fehler beim Stop-Loss SELL: {e}")
             self.close_trade('spot', 'long', trade.volume, current_price, 'stop_loss', transaction_id)
             return "stop_loss"
         # Momentum-Exit
         if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
-            self.data.save_log('INFO', 'trader', 'monitor_trade', f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}", transaction_id)
             self.send_telegram(f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}")
             try:
                 order = self.exchange.create_order(
                     self.symbol, 'MARKET', 'SELL', trade.volume
                 )
-                self.data.save_log('INFO', 'trader', 'monitor_trade', f"Momentum-Exit SELL ausgeführt: {order}", transaction_id)
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Momentum-Exit SELL ausgeführt: {order}", transaction_id)
             except Exception as e:
-                self.data.save_log('ERROR', 'trader', 'monitor_trade', f"Fehler beim Momentum-Exit SELL: {e}", transaction_id)
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Momentum-Exit SELL: {e}", transaction_id)
                 self.send_telegram(f"Fehler beim Momentum-Exit SELL: {e}")
             self.close_trade('spot', 'long', trade.volume, current_price, 'momentum_exit', transaction_id)
             return "momentum_exit"
@@ -274,7 +340,7 @@ class SpotLongTrader(BaseTrader):
             if trailing_stop is not None and current_price > trade.entry:
                 old_sl = trade.stop_loss
                 trade.stop_loss = trailing_stop
-                self.data.save_log('INFO', 'trader', 'monitor_trade', f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}", transaction_id)
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}", transaction_id)
                 self.send_telegram(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
         return None
 
@@ -285,7 +351,7 @@ class FuturesShortTrader(BaseTrader):
             api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
             api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')
             if not api_key or not api_secret:
-                self.data.save_log('ERROR', 'trader', 'Binance API-Key oder Secret fehlt!')
+                self.data.save_log(LOG_ERROR, 'trader', 'Binance API-Key oder Secret fehlt!')
                 raise ValueError('Binance API-Key oder Secret fehlt!')
             try:
                 self.exchange = ccxt.binance({
@@ -295,89 +361,35 @@ class FuturesShortTrader(BaseTrader):
                     'options': {'defaultType': 'future', 'contractType': 'PERPETUAL'}
                 })
             except Exception as e:
-                self.data.save_log('ERROR', 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
+                self.data.save_log(LOG_ERROR, 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
                 raise
 
     def handle_trades(self, strategy, transaction_id):
+        """
+        Handles the trading loop: evaluates signals, manages open trades, and executes new trades for futures short.
+        """
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für handle_trades")
-        symbol = self.symbol
-        self.data.save_log('DEBUG', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Prüfe Symbol: {symbol}", transaction_id)
+        self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[FUTURES] Prüfe Symbol: {self.symbol}", transaction_id)
         try:
-            df = self.data.load_ohlcv(symbol, 'futures')
-            if df.empty:
-                self.data.save_log('WARNING', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Keine OHLCV-Daten für {symbol} geladen oder Datei fehlt.", transaction_id)
-                return
-            self.data.save_log('DEBUG', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] OHLCV-Daten für {symbol} geladen. Zeilen: {len(df)}", transaction_id)
-            candle_time = df['timestamp'].iloc[-1]
-            if self.last_candle_time is None or candle_time > self.last_candle_time:
-                self.last_candle_time = candle_time
-                eval_result = strategy.evaluate_signal(df)
-                # Speichere das aktuelle Signal gezielt für die letzte Kerze
-                signal_row = df.iloc[[-1]].copy()
-                for key in ['signal', 'price_change', 'volume_score', 'rsi']:
-                    val = eval_result.get(key)
-                    signal_row[key] = val
-                self.data.save_signals(signal_row, symbol, 'futures', transaction_id)
-                if eval_result.get('trade_signal'):
-                    self.data.save_log('INFO', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Signal erkannt für {symbol}: {eval_result}", transaction_id)
-                    vol_score = eval_result.get('volume_score', 0) or 0
-                    candidate = {
-                        'symbol': symbol,
-                        'signal': eval_result,
-                        'vol_score': vol_score,
-                        'df': df
-                    }
-                else:
-                    self.data.save_log('DEBUG', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Kein Signal für {symbol} in aktueller Kerze.", transaction_id)
-                    candidate = None
-            else:
-                self.data.save_log('DEBUG', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Keine neue Kerze für {symbol}.", transaction_id)
-                candidate = None
+            df = self.data.load_ohlcv(self.symbol, FUTURES)
+            candidate = self.evaluate_and_store_signal(strategy, df, FUTURES, transaction_id)
         except Exception as e:
-            self.data.save_log('ERROR', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Fehler beim Laden/Verarbeiten der OHLCV-Daten für {symbol}: {e}", transaction_id)
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_trades', f"[FUTURES] Fehler beim Laden/Verarbeiten der OHLCV-Daten für {self.symbol}: {e}", transaction_id)
             candidate = None
 
         if self.open_trade is not None:
-            symbol = self.open_trade['symbol']
-            df = self.open_trade['df']
-            self.data.save_log('DEBUG', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Überwache offenen Trade für {symbol}.", transaction_id)
-            exit_type = self.monitor_trade(self.open_trade['signal'], df, strategy, transaction_id)
-            if exit_type:
-                self.data.save_log('INFO', 'FuturesShortTrader', 'handle_trades', f"[MAIN] Futures-Short-Trade für {symbol} geschlossen: {exit_type}", transaction_id)
-                self.send_telegram(f"Futures-Short-Trade für {symbol} geschlossen: {exit_type}")
-                self.open_trade = None
-            else:
-                self.data.save_log('DEBUG', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Trade für {symbol} bleibt offen.", transaction_id)
+            self.handle_open_trade(strategy, transaction_id, FUTURES, SHORT)
         else:
             if candidate:
-                symbol = candidate['symbol']
-                signal = candidate['signal']
-                df = candidate['df']
-                self.data.save_log('INFO', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Führe Trade aus für {symbol} mit Vol-Score {candidate['vol_score']}", transaction_id)
-                try:
-                    # Erzeuge ein Dummy-Objekt mit Attributen für execute_trade
-                    class SignalObj:
-                        pass
-                    signal_obj = SignalObj()
-                    for k, v in signal.items():
-                        setattr(signal_obj, k, v)
-                    result = self.execute_trade(signal_obj, transaction_id)
-                    self.data.save_log('INFO', 'FuturesShortTrader', 'handle_trades', f"[MAIN] Futures-Short-Trade ausgeführt für {symbol}: {result}", transaction_id)
-                    if result:
-                        self.send_telegram(f"Futures-Short-Trade ausgeführt für {symbol} Entry: {signal.get('entry')} SL: {signal.get('stop_loss')} TP: {signal.get('take_profit')} Vol: {signal.get('volume')}")
-                        self.open_trade = candidate
-                    else:
-                        self.data.save_log('WARNING', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Trade für {symbol} wurde nicht ausgeführt (execute_trade lieferte None).", transaction_id)
-                except Exception as e:
-                    self.data.save_log('ERROR', 'FuturesShortTrader', 'handle_trades', f"Fehler beim Ausführen des Futures-Short-Trades für {symbol}: {e}", transaction_id)
+                self.handle_new_trade_candidate(candidate, strategy, transaction_id, FUTURES, SHORT, self.execute_trade)
             else:
-                self.data.save_log('DEBUG', 'FuturesShortTrader', 'handle_trades', f"[FUTURES] Kein Kandidat für neuen Trade gefunden.", transaction_id)
+                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[FUTURES] Kein Kandidat für neuen Trade gefunden.", transaction_id)
 
     def execute_trade(self, signal, transaction_id):
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für execute_trade")
-        self.data.save_log('DEBUG', 'trader', 'execute_trade', f"Starte execute_trade für {self.symbol} (SHORT). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}", transaction_id)
+        self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Starte execute_trade für {self.symbol} (SHORT). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}", transaction_id)
         fixed_notional = self.config.get('trading', {}).get('fixed_futures_notional', 25)
         ticker = self.exchange.fetch_ticker(self.symbol)
         price = ticker.get('last') or ticker.get('close')
@@ -385,10 +397,10 @@ class FuturesShortTrader(BaseTrader):
             volume = fixed_notional / price
         else:
             volume = signal.volume
-        self.data.save_log('DEBUG', 'trader', 'execute_trade', f"Berechnetes Volumen für {self.symbol}: {volume}", transaction_id)
+        self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Berechnetes Volumen für {self.symbol}: {volume}", transaction_id)
         msg = f"SHORT {self.symbol} @ {signal.entry} Vol: {volume}"
         if self.mode == 'testnet':
-            self.data.save_log('INFO', 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
             self.send_telegram(f"[TESTNET] {msg}")
             # Testnet-Trade als Dummy in DB speichern
             trade_dict = {
@@ -404,16 +416,16 @@ class FuturesShortTrader(BaseTrader):
                 'extra': '[TESTNET]'
             }
             self.data.save_trade(trade_dict, transaction_id)
-            self.data.save_log('INFO', 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_dict}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_dict}", transaction_id)
             return True
         try:
-            self.data.save_log('DEBUG', 'trader', 'execute_trade', f"Sende Market-SELL Order für {self.symbol}...", transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Sende Market-SELL Order für {self.symbol}...", transaction_id)
             order = self.exchange.create_market_sell_order(
                 self.symbol,
                 volume,
                 params={"reduceOnly": False}
             )
-            self.data.save_log('INFO', 'trader', 'execute_trade', f"Short-Order ausgeführt: {order}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Short-Order ausgeführt: {order}", transaction_id)
             self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             # Update signal volume to actual executed amount
             signal.volume = order.get('amount', volume)
@@ -431,10 +443,10 @@ class FuturesShortTrader(BaseTrader):
                 'extra': str(order)
             }
             self.data.save_trade(trade_dict, transaction_id)
-            self.data.save_log('INFO', 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_dict}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_dict}", transaction_id)
             return order
         except Exception as e:
-            self.data.save_log('ERROR', 'trader', 'execute_trade', f"Short-Trade fehlgeschlagen: {e}", transaction_id)
+            self.data.save_log(LOG_ERROR, 'trader', 'execute_trade', f"Short-Trade fehlgeschlagen: {e}", transaction_id)
             self.send_telegram(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
@@ -443,28 +455,28 @@ class FuturesShortTrader(BaseTrader):
             raise ValueError("transaction_id ist Pflicht für monitor_trade")
         current_price = df['close'].iloc[-1]
         if current_price <= trade.take_profit:
-            self.data.save_log('INFO', 'trader', 'monitor_trade', f"Take-Profit erreicht: {current_price} <= {trade.take_profit}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Take-Profit erreicht: {current_price} <= {trade.take_profit}", transaction_id)
             self.send_telegram(f"Take-Profit erreicht: {current_price} <= {trade.take_profit}")
             self.close_trade('futures', 'short', trade.volume, current_price, 'take_profit', transaction_id)
             return "take_profit"
         if current_price >= trade.stop_loss:
-            self.data.save_log('INFO', 'trader', 'monitor_trade', f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}", transaction_id)
             self.send_telegram(f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}")
             # Close short position
             try:
                 self.exchange.create_market_buy_order(self.symbol, trade.volume, params={"reduceOnly": True})
             except Exception as e:
-                self.data.save_log('ERROR', 'trader', 'monitor_trade', f"Error closing short position: {e}", transaction_id)
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Error closing short position: {e}", transaction_id)
             self.close_trade('futures', 'short', trade.volume, current_price, 'stop_loss', transaction_id)
             return "stop_loss"
         if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
-            self.data.save_log('INFO', 'trader', 'monitor_trade', f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}", transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}", transaction_id)
             self.send_telegram(f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}")
             # Close short on momentum exit
             try:
                 self.exchange.create_market_buy_order(self.symbol, trade.volume, params={"reduceOnly": True})
             except Exception as e:
-                self.data.save_log('ERROR', 'trader', 'monitor_trade', f"Error closing short on momentum exit: {e}", transaction_id)
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Error closing short on momentum exit: {e}", transaction_id)
             self.close_trade('futures', 'short', trade.volume, current_price, 'momentum_exit', transaction_id)
             return "momentum_exit"
         if hasattr(strategy, 'get_trailing_stop'):
@@ -472,6 +484,6 @@ class FuturesShortTrader(BaseTrader):
             if trailing_stop is not None and current_price < trade.entry:
                 old_sl = trade.stop_loss
                 trade.stop_loss = trailing_stop
-                self.data.save_log('INFO', 'trader', 'monitor_trade', f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}", transaction_id)
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}", transaction_id)
                 self.send_telegram(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
         return None

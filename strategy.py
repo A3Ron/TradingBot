@@ -1,8 +1,13 @@
 import pandas as pd
 import yaml
+from typing import Dict, Any, Optional
+
 
 class TradeSignal:
-    def __init__(self, signal_type, entry, stop_loss, take_profit, volume):
+    """
+    Datenstruktur für ein Handelssignal.
+    """
+    def __init__(self, signal_type: str, entry: float, stop_loss: float, take_profit: float, volume: float):
         self.signal_type = signal_type
         self.entry = entry
         self.stop_loss = stop_loss
@@ -24,21 +29,63 @@ def get_strategy(config):
         'futures_short': FuturesShortStrategy(strategy_cfg)
     }
 
+
+
 class BaseStrategy:
-    def __init__(self, strategy_cfg):
+    # Signal column constants
+    COL_CLOSE: str = 'close'
+    COL_VOLUME: str = 'volume'
+    COL_TIMESTAMP: str = 'timestamp'
+    COL_PRICE_CHANGE: str = 'price_change'
+    COL_VOL_MEAN: str = 'vol_mean'
+    COL_RSI: str = 'rsi'
+    COL_VOLUME_SCORE: str = 'volume_score'
+
+    # Log level constants
+    LOG_DEBUG: str = 'DEBUG'
+    LOG_INFO: str = 'INFO'
+    LOG_WARN: str = 'WARNING'
+    LOG_ERROR: str = 'ERROR'
+
+    def __init__(self, strategy_cfg: dict):
         self.config = strategy_cfg
         self.params = strategy_cfg.get('params', {})
-        self.stop_loss_pct = float(self.params.get('stop_loss_pct', 0.03))
-        self.take_profit_pct = float(self.params.get('take_profit_pct', 0.08))
-        self.trailing_trigger_pct = float(self.params.get('trailing_trigger_pct', 0.05))
-        self.price_change_pct = float(self.params.get('price_change_pct', 0.03))
-        self.volume_mult = float(self.params.get('volume_mult', 2))
-        self.rsi_long = int(self.params.get('rsi_long', 60))
-        self.rsi_short = int(self.params.get('rsi_short', 40))
-        self.rsi_tp_exit = int(self.params.get('rsi_tp_exit', 50))
-        self.momentum_exit_rsi = int(self.params.get('momentum_exit_rsi', 50))
-        self.rsi_period = int(self.params.get('rsi_period', 14))
-        self.price_change_periods = int(self.params.get('price_change_periods', 12))
+        self.stop_loss_pct: float = float(self.params.get('stop_loss_pct', 0.03))
+        self.take_profit_pct: float = float(self.params.get('take_profit_pct', 0.08))
+        self.trailing_trigger_pct: float = float(self.params.get('trailing_trigger_pct', 0.05))
+        self.price_change_pct: float = float(self.params.get('price_change_pct', 0.03))
+        self.volume_mult: float = float(self.params.get('volume_mult', 2))
+        self.rsi_long: int = int(self.params.get('rsi_long', 60))
+        self.rsi_short: int = int(self.params.get('rsi_short', 40))
+        self.rsi_tp_exit: int = int(self.params.get('rsi_tp_exit', 50))
+        self.momentum_exit_rsi: int = int(self.params.get('momentum_exit_rsi', 50))
+        self.rsi_period: int = int(self.params.get('rsi_period', 14))
+        self.price_change_periods: int = int(self.params.get('price_change_periods', 12))
+
+    def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:
+        """
+        Berechnet den RSI-Indikator für eine gegebene Preisserie.
+        Args:
+            series: pd.Series mit Preisen
+            period: RSI-Periode
+        Returns:
+            pd.Series mit RSI-Werten
+        """
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
+        rs = gain / (loss + 1e-9)
+        return 100 - (100 / (1 + rs))
+
+    def ensure_rsi_column(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Stellt sicher, dass die RSI-Spalte im DataFrame vorhanden ist.
+        Gibt ggf. eine Kopie mit berechneter RSI-Spalte zurück.
+        """
+        if self.COL_RSI not in df.columns:
+            df = df.copy()
+            df[self.COL_RSI] = self.calc_rsi(df[self.COL_CLOSE], self.rsi_period)
+        return df
 
     def calc_rsi(self, series, period):
         delta = series.diff()
@@ -51,64 +98,105 @@ class SpotLongStrategy(BaseStrategy):
     """
     Strategie für Long-Trades auf Spot-Märkten
     """
-    
-    def should_exit_momentum(self, df):
+
+    def should_exit_momentum(self, df: pd.DataFrame) -> bool:
         """
         Gibt True zurück, wenn der RSI unter den Momentum-Exit-Schwellenwert fällt (z.B. für Long-Exits).
+        Args:
+            df: DataFrame mit Marktdaten
+        Returns:
+            bool: True, wenn Momentum-Exit-Bedingung erfüllt
         """
-        if 'rsi' not in df.columns:
-            df = df.copy()
-            df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
-        rsi = df['rsi'].iloc[-1]
+        df = self.ensure_rsi_column(df)
+        rsi = df[self.COL_RSI].iloc[-1]
+        if pd.isnull(rsi):
+            print(f"[{self.LOG_WARN}] RSI ist NaN in should_exit_momentum.")
+            return False
         return rsi < self.momentum_exit_rsi
 
-    def get_trailing_stop(self, entry, current_price):
+    def get_trailing_stop(self, entry: float, current_price: float) -> Optional[float]:
+        """
+        Gibt den neuen Stop-Loss zurück, falls Trailing-Stop-Bedingung erfüllt ist, sonst None.
+        Args:
+            entry: Einstiegswert
+            current_price: aktueller Preis
+        Returns:
+            Optional[float]: Neuer Stop-Loss oder None
+        """
         profit_pct = (current_price - entry) / entry
         if profit_pct >= self.trailing_trigger_pct:
             return entry
         return None
 
-    def evaluate_signal(self, df):
+    def evaluate_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         Liefert für die aktuelle Kerze alle Trade- und Signalinfos als Dict zurück.
         Erwartet ein DataFrame mit Spalten: ['close', 'volume'] (und optional 'timestamp').
         Gibt ein Dict zurück mit: trade_signal, signal_type, entry, stop_loss, take_profit, volume, price_change, volume_score, rsi
+        Beispiel:
+            {
+                'trade_signal': True,
+                'signal_type': 'long',
+                'entry': 123.45,
+                'stop_loss': 120.0,
+                'take_profit': 135.0,
+                'volume': 0.1,
+                'price_change': 0.04,
+                'volume_score': 2.1,
+                'rsi': 65.0
+            }
         """
-        df = df.copy()
+        # Nur die letzten price_change_periods+1 Zeilen für Performance
+        df = df.tail(self.price_change_periods + 2).copy()
         # Defensive: Fehlende Spalten abfangen
-        for col in ['close', 'volume']:
+        for col in [self.COL_CLOSE, self.COL_VOLUME]:
             if col not in df.columns:
                 raise ValueError(f"DataFrame muss Spalte '{col}' enthalten!")
-        df['price_change'] = df['close'].pct_change(periods=self.price_change_periods)
-        df['vol_mean'] = df['volume'].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
-        df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
-        # Division durch Null vermeiden
-        df['volume_score'] = df['volume'] / df['vol_mean'].replace(0, float('nan'))
+        # Berechnungen
+        df[self.COL_PRICE_CHANGE] = df[self.COL_CLOSE].pct_change(periods=self.price_change_periods)
+        df[self.COL_VOL_MEAN] = df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
+        df = self.ensure_rsi_column(df)
+        df[self.COL_VOLUME_SCORE] = df[self.COL_VOLUME] / df[self.COL_VOL_MEAN].replace(0, float('nan'))
         last = df.iloc[-1]
-        # Robustheit: NaN abfangen
-        price_change = last['price_change'] if pd.notnull(last['price_change']) else 0.0
-        vol_mean = last['vol_mean'] if pd.notnull(last['vol_mean']) and last['vol_mean'] != 0 else 1.0
-        volume_score = last['volume'] / vol_mean if vol_mean else 0.0
-        rsi = last['rsi'] if pd.notnull(last['rsi']) else 0.0
+        # Fehlerbehandlung für NaN/unplausible Werte
+        price_change = last[self.COL_PRICE_CHANGE] if pd.notnull(last[self.COL_PRICE_CHANGE]) else 0.0
+        vol_mean = last[self.COL_VOL_MEAN] if pd.notnull(last[self.COL_VOL_MEAN]) and last[self.COL_VOL_MEAN] != 0 else 1.0
+        volume_score = last[self.COL_VOLUME] / vol_mean if vol_mean else 0.0
+        rsi = last[self.COL_RSI] if pd.notnull(last[self.COL_RSI]) else 0.0
+        if any(pd.isnull([price_change, vol_mean, volume_score, rsi])):
+            print(f"[{self.LOG_WARN}] NaN in Signalberechnung: price_change={price_change}, vol_mean={vol_mean}, volume_score={volume_score}, rsi={rsi}")
         signal = (
             price_change > self.price_change_pct and
-            last['volume'] > self.volume_mult * vol_mean and
+            last[self.COL_VOLUME] > self.volume_mult * vol_mean and
             rsi > self.rsi_long
         )
-        entry = last['close']
-        stop_loss = entry * (1 - self.stop_loss_pct) if signal else None
-        take_profit = entry * (1 + self.take_profit_pct) if signal else None
-        return {
-            'trade_signal': signal,
-            'signal_type': 'long' if signal else None,
-            'entry': entry if signal else None,
-            'stop_loss': stop_loss,
-            'take_profit': take_profit,
-            'volume': last['volume'] if signal else None,
-            'price_change': price_change,
-            'volume_score': volume_score,
-            'rsi': rsi
-        }
+        if signal:
+            entry = last[self.COL_CLOSE]
+            stop_loss = entry * (1 - self.stop_loss_pct)
+            take_profit = entry * (1 + self.take_profit_pct)
+            return {
+                'trade_signal': True,
+                'signal_type': 'long',
+                'entry': entry,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'volume': last[self.COL_VOLUME],
+                'price_change': price_change,
+                'volume_score': volume_score,
+                'rsi': rsi
+            }
+        else:
+            return {
+                'trade_signal': False,
+                'signal_type': None,
+                'entry': None,
+                'stop_loss': None,
+                'take_profit': None,
+                'volume': None,
+                'price_change': price_change,
+                'volume_score': volume_score,
+                'rsi': rsi
+            }
 
 
 class FuturesShortStrategy(BaseStrategy):
@@ -116,58 +204,98 @@ class FuturesShortStrategy(BaseStrategy):
     Strategie für Short-Trades auf Futures-Märkten
     """
 
-    def should_exit_momentum(self, df):
+    def should_exit_momentum(self, df: pd.DataFrame) -> bool:
         """
         Gibt True zurück, wenn der RSI über den Momentum-Exit-Schwellenwert steigt (z.B. für Short-Exits).
+        Args:
+            df: DataFrame mit Marktdaten
+        Returns:
+            bool: True, wenn Momentum-Exit-Bedingung erfüllt
         """
-        if 'rsi' not in df.columns:
-            df = df.copy()
-            df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
-        rsi = df['rsi'].iloc[-1]
+        df = self.ensure_rsi_column(df)
+        rsi = df[self.COL_RSI].iloc[-1]
+        if pd.isnull(rsi):
+            print(f"[{self.LOG_WARN}] RSI ist NaN in should_exit_momentum.")
+            return False
         return rsi > self.momentum_exit_rsi
 
-    def get_trailing_stop(self, entry, current_price):
+    def get_trailing_stop(self, entry: float, current_price: float) -> Optional[float]:
+        """
+        Gibt den neuen Stop-Loss zurück, falls Trailing-Stop-Bedingung erfüllt ist, sonst None.
+        Args:
+            entry: Einstiegswert
+            current_price: aktueller Preis
+        Returns:
+            Optional[float]: Neuer Stop-Loss oder None
+        """
         profit_pct = (entry - current_price) / entry
         if profit_pct >= self.trailing_trigger_pct:
             return entry
         return None
 
-    def evaluate_signal(self, df):
+    def evaluate_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         Liefert für die aktuelle Kerze alle Trade- und Signalinfos als Dict zurück.
         Erwartet ein DataFrame mit Spalten: ['close', 'volume'] (und optional 'timestamp').
         Gibt ein Dict zurück mit: trade_signal, signal_type, entry, stop_loss, take_profit, volume, price_change, volume_score, rsi
+        Beispiel:
+            {
+                'trade_signal': True,
+                'signal_type': 'short',
+                'entry': 123.45,
+                'stop_loss': 130.0,
+                'take_profit': 110.0,
+                'volume': 0.1,
+                'price_change': -0.04,
+                'volume_score': 2.1,
+                'rsi': 35.0
+            }
         """
-        df = df.copy()
-        for col in ['close', 'volume']:
+        df = df.tail(self.price_change_periods + 2).copy()
+        for col in [self.COL_CLOSE, self.COL_VOLUME]:
             if col not in df.columns:
                 raise ValueError(f"DataFrame muss Spalte '{col}' enthalten!")
-        df['price_change'] = df['close'].pct_change(periods=self.price_change_periods)
-        df['vol_mean'] = df['volume'].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
-        df['rsi'] = self.calc_rsi(df['close'], self.rsi_period)
-        df['volume_score'] = df['volume'] / df['vol_mean'].replace(0, float('nan'))
+        df[self.COL_PRICE_CHANGE] = df[self.COL_CLOSE].pct_change(periods=self.price_change_periods)
+        df[self.COL_VOL_MEAN] = df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
+        df = self.ensure_rsi_column(df)
+        df[self.COL_VOLUME_SCORE] = df[self.COL_VOLUME] / df[self.COL_VOL_MEAN].replace(0, float('nan'))
         last = df.iloc[-1]
-        price_change = last['price_change'] if pd.notnull(last['price_change']) else 0.0
-        vol_mean = last['vol_mean'] if pd.notnull(last['vol_mean']) and last['vol_mean'] != 0 else 1.0
-        volume_score = last['volume'] / vol_mean if vol_mean else 0.0
-        rsi = last['rsi'] if pd.notnull(last['rsi']) else 0.0
+        price_change = last[self.COL_PRICE_CHANGE] if pd.notnull(last[self.COL_PRICE_CHANGE]) else 0.0
+        vol_mean = last[self.COL_VOL_MEAN] if pd.notnull(last[self.COL_VOL_MEAN]) and last[self.COL_VOL_MEAN] != 0 else 1.0
+        volume_score = last[self.COL_VOLUME] / vol_mean if vol_mean else 0.0
+        rsi = last[self.COL_RSI] if pd.notnull(last[self.COL_RSI]) else 0.0
+        if any(pd.isnull([price_change, vol_mean, volume_score, rsi])):
+            print(f"[{self.LOG_WARN}] NaN in Signalberechnung: price_change={price_change}, vol_mean={vol_mean}, volume_score={volume_score}, rsi={rsi}")
         signal = (
             price_change < -self.price_change_pct and
-            last['volume'] > self.volume_mult * vol_mean and
+            last[self.COL_VOLUME] > self.volume_mult * vol_mean and
             rsi < self.rsi_short
         )
-        entry = last['close']
-        stop_loss = entry * (1 + self.stop_loss_pct) if signal else None
-        take_profit = entry * (1 - self.take_profit_pct) if signal else None
-        return {
-            'trade_signal': signal,
-            'signal_type': 'short' if signal else None,
-            'entry': entry if signal else None,
-            'stop_loss': stop_loss,
-            'take_profit': take_profit,
-            'volume': last['volume'] if signal else None,
-            'price_change': price_change,
-            'volume_score': volume_score,
-            'rsi': rsi
-        }
+        if signal:
+            entry = last[self.COL_CLOSE]
+            stop_loss = entry * (1 + self.stop_loss_pct)
+            take_profit = entry * (1 - self.take_profit_pct)
+            return {
+                'trade_signal': True,
+                'signal_type': 'short',
+                'entry': entry,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'volume': last[self.COL_VOLUME],
+                'price_change': price_change,
+                'volume_score': volume_score,
+                'rsi': rsi
+            }
+        else:
+            return {
+                'trade_signal': False,
+                'signal_type': None,
+                'entry': None,
+                'stop_loss': None,
+                'take_profit': None,
+                'volume': None,
+                'price_change': price_change,
+                'volume_score': volume_score,
+                'rsi': rsi
+            }
 
