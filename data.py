@@ -12,6 +12,9 @@ from strategy import get_strategy
 import datetime
 import requests
 import traceback
+import sys
+import uuid
+
 
 load_dotenv()
 
@@ -94,12 +97,12 @@ def create_tables(engine):
 create_tables(pg_engine)
 
 class DataFetcher:
-    def get_symbols_table(self):
+    def get_symbols_table(self) -> Table:
         meta = MetaData()
         table = Table('symbols', meta, autoload_with=pg_engine)
         return table
 
-    def get_all_symbols(self, symbol_type=None):
+    def get_all_symbols(self, symbol_type: str = None) -> list:
         """Lädt alle Symbole aus der DB, optional gefiltert nach symbol_type."""
         table = self.get_symbols_table()
         session = self.get_session()
@@ -110,7 +113,7 @@ class DataFetcher:
         session.close()
         return [dict(row) for row in rows]
 
-    def get_selected_symbols(self, symbol_type=None):
+    def get_selected_symbols(self, symbol_type: str = None) -> list:
         """Lädt alle als selected markierten Symbole aus der DB."""
         table = self.get_symbols_table()
         session = self.get_session()
@@ -121,7 +124,7 @@ class DataFetcher:
         session.close()
         return [dict(row) for row in rows]
 
-    def select_symbol(self, symbol, symbol_type, selected=True):
+    def select_symbol(self, symbol: str, symbol_type: str, selected: bool = True) -> None:
         """Setzt das selected-Flag für ein Symbol (UI-Auswahl)."""
         table = self.get_symbols_table()
         session = self.get_session()
@@ -133,7 +136,7 @@ class DataFetcher:
         session.commit()
         session.close()
 
-    def upsert_symbol(self, symbol, symbol_type, **kwargs):
+    def upsert_symbol(self, symbol: str, symbol_type: str, **kwargs) -> None:
         """Fügt ein Symbol ein oder aktualisiert es (z.B. nach Binance-Update)."""
         table = self.get_symbols_table()
         session = self.get_session()
@@ -152,16 +155,19 @@ class DataFetcher:
         session.commit()
         session.close()
 
-    def save_log(self, level, source, method, message):
-        """Speichert einen Log-Eintrag in der Datenbank."""
+    def save_log(self, level: str, source: str, method: str, message: str, transaction_id: str, _recursion: int = 0) -> None:
+        """Speichert einen Log-Eintrag in der Datenbank. Fallback auf stderr bei wiederholtem Fehler. transaction_id ist Pflicht."""
+        if not transaction_id:
+            raise ValueError("transaction_id ist Pflicht für save_log")
         session = self.get_session()
         try:
             session.execute(
                 sqlalchemy.text("""
-                    INSERT INTO logs (timestamp, level, source, method, message)
-                    VALUES (:timestamp, :level, :source, :method, :message)
+                    INSERT INTO logs (transaction_id, timestamp, level, source, method, message)
+                    VALUES (:transaction_id, :timestamp, :level, :source, :method, :message)
                 """),
                 {
+                    'transaction_id': transaction_id,
                     'timestamp': datetime.datetime.now(datetime.timezone.utc),
                     'level': level,
                     'source': source,
@@ -171,14 +177,22 @@ class DataFetcher:
             )
             session.commit()
         except Exception as e:
-            self.save_log('ERROR', 'data', 'save_log', f"Log DB-Save fehlgeschlagen: {e}")
             session.rollback()
+            if _recursion < 1:
+                self.save_log('ERROR', 'data', 'save_log', f"Log DB-Save fehlgeschlagen: {e}", transaction_id, _recursion=_recursion+1)
+            else:
+                print(f"[LOGGING ERROR] {e} | Ursprüngliche Nachricht: {message}", file=sys.stderr)
         finally:
             session.close()
 
-    def _init_exchange(self, market_type='spot'):
+    def _init_exchange(self, market_type: str = 'spot') -> None:
         """Initialisiert self.exchange für Spot oder Futures."""
         mode = os.environ.get('MODE', 'live')
+        if not hasattr(self, 'exchanges'):
+            self.exchanges = {}
+        if market_type in self.exchanges:
+            self.exchange = self.exchanges[market_type]
+            return
         if market_type == 'futures':
             options = {'defaultType': 'future', 'contractType': 'PERPETUAL'}
         else:
@@ -193,26 +207,29 @@ class DataFetcher:
                         'public': 'https://testnet.binance.vision/api',
                     }
                 }
-            self.exchange = ccxt.binance({
+            exchange = ccxt.binance({
                 'apiKey': api_key,
                 'secret': api_secret,
                 'enableRateLimit': True,
                 'options': options,
                 **({'urls': urls} if urls else {})
             })
-            self.exchange.set_sandbox_mode(True)
+            exchange.set_sandbox_mode(True)
         else:
             api_key = os.getenv('BINANCE_API_KEY')
             api_secret = os.getenv('BINANCE_API_SECRET')
-            self.exchange = ccxt.binance({
+            exchange = ccxt.binance({
                 'apiKey': api_key,
                 'secret': api_secret,
                 'enableRateLimit': True,
                 'options': options,
             })
-    def __init__(self, config=None):
+        self.exchanges[market_type] = exchange
+        self.exchange = exchange
+    def __init__(self, config: dict = None):
         self.config = config
-    def get_spot_symbols(self):
+        self.exchanges = {}
+    def get_spot_symbols(self) -> list:
         """Lädt alle handelbaren Spot-Symbole von Binance."""
         try:
             url = "https://api.binance.com/api/v3/exchangeInfo"
@@ -233,7 +250,7 @@ class DataFetcher:
             return []
         
 
-    def load_trades(self, limit=1000):
+    def load_trades(self, limit: int = 1000) -> pd.DataFrame:
         """Lädt Trades aus der Datenbank."""
         session = self.get_session()
         try:
@@ -254,45 +271,50 @@ class DataFetcher:
         finally:
             session.close()
 
-    def get_session(self):
+    def get_session(self) -> sqlalchemy.orm.Session:
         return Session()
     
-    def save_trade(self, trade_dict):
-        """Speichert einen Trade in der Datenbank."""
+    def save_trade(self, trade_dict: dict, transaction_id: str) -> None:
+        """Speichert einen Trade in der Datenbank. transaction_id ist Pflicht. Generiert UUID falls nicht vorhanden."""
+        if not transaction_id:
+            raise ValueError("transaction_id ist Pflicht für save_trade")
         session = self.get_session()
         try:
+            if 'id' not in trade_dict or not trade_dict['id']:
+                trade_dict['id'] = str(uuid.uuid4())
+            trade_dict['transaction_id'] = transaction_id
             session.execute(sqlalchemy.text("""
-                INSERT INTO trades (symbol, market_type, timestamp, side, qty, price, fee, profit, order_id, extra)
-                VALUES (:symbol, :market_type, :timestamp, :side, :qty, :price, :fee, :profit, :order_id, :extra)
+                INSERT INTO trades (id, transaction_id, symbol, market_type, timestamp, side, qty, price, fee, profit, order_id, extra)
+                VALUES (:id, :transaction_id, :symbol, :market_type, :timestamp, :side, :qty, :price, :fee, :profit, :order_id, :extra)
             """), trade_dict)
             session.commit()
         except Exception as e:
             session.rollback()
-            self.save_log('ERROR', 'data', 'save_trade', f"Trade DB-Save fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_trade', f"Trade DB-Save fehlgeschlagen: {e}", transaction_id)
         finally:
             session.close()
 
-    def load_ohlcv(self, symbol, market_type, limit=500):
+    def load_ohlcv(self, symbol: str, market_type: str, limit: int = 500) -> pd.DataFrame:
         """Lädt OHLCV-Daten aus PostgreSQL."""
         session = self.get_session()
         try:
             rows = session.execute(sqlalchemy.text("""
-                SELECT timestamp, open, high, low, close, volume, signal, signal_reason
+                SELECT timestamp, open, high, low, close, volume, signal
                 FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type
                 ORDER BY timestamp DESC LIMIT :limit
             """), dict(symbol=symbol, market_type=market_type, limit=limit)).fetchall()
             if not rows:
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
-            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
+            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df.sort_values('timestamp')
         except Exception as e:
             self.save_log('ERROR', 'data', 'load_ohlcv', f"OHLCV DB-Load fehlgeschlagen: {e}")
-            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal', 'signal_reason'])
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
         finally:
             session.close()
 
-    def load_logs(self, level=None, limit=100):
+    def load_logs(self, level: str = None, limit: int = 100) -> pd.DataFrame:
         """Lädt Logs aus der Datenbank (optional gefiltert)."""
         session = self.get_session()
         try:
@@ -312,7 +334,7 @@ class DataFetcher:
         finally:
             session.close()
 
-    def fetch_portfolio(self):
+    def fetch_portfolio(self) -> dict:
         """Holt Spot- und Futures-Portfolio getrennt und gibt beide plus das Total zurück."""
         results = {}
         # Spot
@@ -333,7 +355,7 @@ class DataFetcher:
         results['total_value'] = total_value
         return results
 
-    def fetch_single_portfolio(self, market_type='spot'):
+    def fetch_single_portfolio(self, market_type: str = 'spot') -> dict:
         # Initialisiere Exchange, falls nicht vorhanden
         if not hasattr(self, 'exchange') or self.exchange is None:
             self._init_exchange(market_type=market_type)
@@ -369,8 +391,10 @@ class DataFetcher:
             assets.append({'asset': asset, 'amount': info, 'price': price, 'value': value})
         return {'assets': assets, 'total_value': total_value, 'prices': prices}
     
-    def save_ohlcv(self, df, symbol, market_type='spot'):
-        """Berechnet Signale und speichert OHLCV-Daten in PostgreSQL (ersetzt/fügt ein)."""
+    def save_ohlcv(self, df: pd.DataFrame, symbol: str, market_type: str, transaction_id: str) -> None:
+        """Berechnet Signale und speichert OHLCV-Daten in PostgreSQL (ersetzt/fügt ein). transaction_id ist Pflicht."""
+        if not transaction_id:
+            raise ValueError("transaction_id ist Pflicht für save_ohlcv")
         if df.empty:
             return
         # Signale und Gründe werden IMMER vor dem Speichern berechnet
@@ -379,16 +403,12 @@ class DataFetcher:
             strat = strategies['spot_long'] if market_type == 'spot' else strategies['futures_short']
             df = strat.get_signals_and_reasons(df)
         except Exception as e:
-            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV Signalberechnung fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV Signalberechnung fehlgeschlagen: {e}", transaction_id)
             # Falls Strategie-Berechnung fehlschlägt, Spalten sicherstellen
-            if 'signal' not in df.columns:
-                df['signal'] = False
-            if 'price_change' not in df.columns:
-                df['price_change'] = None
-            if 'volume_score' not in df.columns:
-                df['volume_score'] = None
-            if 'rsi' not in df.columns:
-                df['rsi'] = None
+            required_cols = {'signal': False, 'price_change': None, 'volume_score': None, 'rsi': None}
+            for col, default in required_cols.items():
+                if col not in df.columns:
+                    df[col] = default
         session = self.get_session()
         try:
             for _, row in df.iterrows():
@@ -398,40 +418,33 @@ class DataFetcher:
                     """),
                     dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'])
                 ).first()
-                update_dict = dict(
-                    id=exists.id if exists else None,
-                    open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'],
-                    signal=bool(row.get('signal', False)),
-                    price_change=row.get('price_change', None),
-                    volume_score=row.get('volume_score', None),
-                    rsi=row.get('rsi', None)
-                )
-                insert_dict = dict(
-                    symbol=symbol, market_type=market_type, timestamp=row['timestamp'],
-                    open=row['open'], high=row['high'], low=row['low'], close=row['close'], volume=row['volume'],
-                    signal=bool(row.get('signal', False)),
-                    price_change=row.get('price_change', None),
-                    volume_score=row.get('volume_score', None),
-                    rsi=row.get('rsi', None)
-                )
+                # Generate UUID for new row if needed
                 if exists:
+                    update_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume', 'signal', 'price_change', 'volume_score', 'rsi']}
+                    update_dict['id'] = exists.id
                     session.execute(sqlalchemy.text("""
                         UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume, signal=:signal, price_change=:price_change, volume_score=:volume_score, rsi=:rsi
                         WHERE id=:id
                     """), update_dict)
                 else:
+                    insert_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume', 'signal', 'price_change', 'volume_score', 'rsi']}
+                    insert_dict['symbol'] = symbol
+                    insert_dict['market_type'] = market_type
+                    insert_dict['timestamp'] = row['timestamp']
+                    insert_dict['id'] = str(uuid.uuid4())
+                    insert_dict['transaction_id'] = transaction_id
                     session.execute(sqlalchemy.text("""
-                        INSERT INTO ohlcv (symbol, market_type, timestamp, open, high, low, close, volume, signal, price_change, volume_score, rsi)
-                        VALUES (:symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume, :signal, :price_change, :volume_score, :rsi)
+                        INSERT INTO ohlcv (id, transaction_id, symbol, market_type, timestamp, open, high, low, close, volume, signal, price_change, volume_score, rsi)
+                        VALUES (:id, :transaction_id, :symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume, :signal, :price_change, :volume_score, :rsi)
                     """), insert_dict)
             session.commit()
         except Exception as e:
             session.rollback()
-            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV DB-Save fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV DB-Save fehlgeschlagen: {e}", transaction_id)
         finally:
             session.close()
 
-    def get_futures_symbols(self):
+    def get_futures_symbols(self) -> list:
         try:
             url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
             resp = requests.get(url, timeout=10)
@@ -484,10 +497,10 @@ class DataFetcher:
                 'enableRateLimit': True,
                 'options': options,
             })
-    def fetch_and_save_ohlcv_for_symbols(self, symbols, market_type='spot', limit=50):
-        """Lädt und speichert OHLCV-Daten für eine Liste von Symbolen."""
-        # Use timeframe from config if available, else fallback to '5m'
-        timeframe = '5m'
+    def fetch_and_save_ohlcv_for_symbols(self, symbols: list, market_type: str, transaction_id: str, limit: int = 50) -> None:
+        """Lädt und speichert OHLCV-Daten für eine Liste von Symbolen. transaction_id ist Pflicht."""
+        if not transaction_id:
+            raise ValueError("transaction_id ist Pflicht für fetch_and_save_ohlcv_for_symbols")
         if self.config and 'trading' in self.config and 'timeframe' in self.config['trading']:
             timeframe = self.config['trading']['timeframe']
         for symbol in symbols:
@@ -497,14 +510,14 @@ class DataFetcher:
                 self.timeframe = timeframe
                 df = self.fetch_ohlcv(limit=limit)
                 if not df.empty:
-                    self.save_ohlcv(df, symbol, market_type)
-                    self.save_log('INFO', 'data', 'fetch_and_save_ohlcv_for_symbols', f"OHLCV für {symbol} ({market_type}) gespeichert. Zeilen: {len(df)}")
+                    self.save_ohlcv(df, symbol, market_type, transaction_id)
+                    self.save_log('INFO', 'data', 'fetch_and_save_ohlcv_for_symbols', f"OHLCV für {symbol} ({market_type}) gespeichert. Zeilen: {len(df)}", transaction_id)
                 else:
-                    self.save_log('WARNING', 'data', 'fetch_and_save_ohlcv_for_symbols', f"Keine OHLCV-Daten für {symbol} ({market_type}) geladen.")
+                    self.save_log('WARNING', 'data', 'fetch_and_save_ohlcv_for_symbols', f"Keine OHLCV-Daten für {symbol} ({market_type}) geladen.", transaction_id)
             except Exception as e:
-                self.save_log('ERROR', 'data', 'fetch_and_save_ohlcv_for_symbols', f"Fehler beim Laden/Speichern von OHLCV für {symbol} ({market_type}): {e}")
+                self.save_log('ERROR', 'data', 'fetch_and_save_ohlcv_for_symbols', f"Fehler beim Laden/Speichern von OHLCV für {symbol} ({market_type}): {e}", transaction_id)
 
-    def fetch_ohlcv(self, limit=50):
+    def fetch_ohlcv(self, limit: int = 50) -> pd.DataFrame:
         """Lädt OHLCV-Daten für das aktuelle Symbol/Timeframe."""
         if hasattr(self, 'exchange') and hasattr(self.exchange, 'urls') and self.exchange.urls['api']['public'].startswith('https://testnet.binance.vision'):
             self.save_log('INFO', 'data', 'fetch_ohlcv', 'Fetching OHLCV from Binance Spot Testnet via HTTP')
