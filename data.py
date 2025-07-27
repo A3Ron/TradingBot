@@ -64,7 +64,7 @@ def create_tables(engine):
     )
     Table('symbols', meta,
         Column('id', UUID, primary_key=True),
-        Column('symbols', JSON, index=True),
+        Column('symbols', JSON),
         Column('symbol_type', String),
         Column('selected', Boolean),
         Column('base_asset', String(32)),

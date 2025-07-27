@@ -79,7 +79,6 @@ class BaseTrader:
         """
         symbol = candidate['symbol']
         signal = candidate['signal']
-        df = candidate['df']
         self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[{market_type.upper()}] Führe Trade aus für {symbol} mit Vol-Score {candidate['vol_score']}", transaction_id)
         try:
             # Erzeuge ein Dummy-Objekt mit Attributen für execute_trade
@@ -169,7 +168,6 @@ class BaseTrader:
                 self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"Signalwerte fehlen: entry={signal.entry}, stop_loss={signal.stop_loss}, volume={signal.volume}")
                 return 0.0
             balance = self.exchange.fetch_balance()
-            base = self.symbol.split('/')[0]
             quote = self.symbol.split('/')[1]
             available = balance[quote]['free'] if quote in balance else 0
             risk_percent = self.config['trading'].get('risk_percent', 1) / 100.0

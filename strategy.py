@@ -1,7 +1,13 @@
 import pandas as pd
 import yaml
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+from data import DataFetcher
 
+# Log level constants
+LOG_DEBUG: str = 'DEBUG'
+LOG_INFO: str = 'INFO'
+LOG_WARN: str = 'WARNING'
+LOG_ERROR: str = 'ERROR'
 
 class TradeSignal:
     """
@@ -30,7 +36,6 @@ def get_strategy(config):
     }
 
 
-
 class BaseStrategy:
     # Signal column constants
     COL_CLOSE: str = 'close'
@@ -40,12 +45,6 @@ class BaseStrategy:
     COL_VOL_MEAN: str = 'vol_mean'
     COL_RSI: str = 'rsi'
     COL_VOLUME_SCORE: str = 'volume_score'
-
-    # Log level constants
-    LOG_DEBUG: str = 'DEBUG'
-    LOG_INFO: str = 'INFO'
-    LOG_WARN: str = 'WARNING'
-    LOG_ERROR: str = 'ERROR'
 
     def __init__(self, strategy_cfg: dict):
         self.config = strategy_cfg
@@ -61,6 +60,8 @@ class BaseStrategy:
         self.momentum_exit_rsi: int = int(self.params.get('momentum_exit_rsi', 50))
         self.rsi_period: int = int(self.params.get('rsi_period', 14))
         self.price_change_periods: int = int(self.params.get('price_change_periods', 12))
+        self.data = DataFetcher(self.config)
+
 
     def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:
         """
@@ -110,7 +111,7 @@ class SpotLongStrategy(BaseStrategy):
         df = self.ensure_rsi_column(df)
         rsi = df[self.COL_RSI].iloc[-1]
         if pd.isnull(rsi):
-            print(f"[{self.LOG_WARN}] RSI ist NaN in should_exit_momentum.")
+            self.data.save_log(LOG_WARN, 'SpotLongStrategy', 'should_exit_momentum', f"RSI ist NaN in should_exit_momentum.")
             return False
         return rsi < self.momentum_exit_rsi
 
@@ -164,7 +165,7 @@ class SpotLongStrategy(BaseStrategy):
         volume_score = last[self.COL_VOLUME] / vol_mean if vol_mean else 0.0
         rsi = last[self.COL_RSI] if pd.notnull(last[self.COL_RSI]) else 0.0
         if any(pd.isnull([price_change, vol_mean, volume_score, rsi])):
-            print(f"[{self.LOG_WARN}] NaN in Signalberechnung: price_change={price_change}, vol_mean={vol_mean}, volume_score={volume_score}, rsi={rsi}")
+            self.data.save_log(LOG_WARN, 'SpotLongStrategy', 'evaluate_signal', f"NaN in Signalberechnung: price_change={price_change}, vol_mean={vol_mean}, volume_score={volume_score}, rsi={rsi}")
         signal = (
             price_change > self.price_change_pct and
             last[self.COL_VOLUME] > self.volume_mult * vol_mean and
@@ -215,7 +216,7 @@ class FuturesShortStrategy(BaseStrategy):
         df = self.ensure_rsi_column(df)
         rsi = df[self.COL_RSI].iloc[-1]
         if pd.isnull(rsi):
-            print(f"[{self.LOG_WARN}] RSI ist NaN in should_exit_momentum.")
+            self.data.save_log(LOG_WARN, 'FuturesShortStrategy', 'should_exit_momentum', f"RSI ist NaN in should_exit_momentum.")
             return False
         return rsi > self.momentum_exit_rsi
 
@@ -265,7 +266,7 @@ class FuturesShortStrategy(BaseStrategy):
         volume_score = last[self.COL_VOLUME] / vol_mean if vol_mean else 0.0
         rsi = last[self.COL_RSI] if pd.notnull(last[self.COL_RSI]) else 0.0
         if any(pd.isnull([price_change, vol_mean, volume_score, rsi])):
-            print(f"[{self.LOG_WARN}] NaN in Signalberechnung: price_change={price_change}, vol_mean={vol_mean}, volume_score={volume_score}, rsi={rsi}")
+            self.data.save_log(LOG_WARN, 'FuturesShortStrategy', 'evaluate_signal', f"NaN in Signalberechnung: price_change={price_change}, vol_mean={vol_mean}, volume_score={volume_score}, rsi={rsi}")
         signal = (
             price_change < -self.price_change_pct and
             last[self.COL_VOLUME] > self.volume_mult * vol_mean and

@@ -13,22 +13,13 @@ trading:
   futures: true
   futures_symbols:
   - ETHUSDT
-  - ADAUSDT
-  - SOLUSDT
   - BNBUSDT
-  - SUIUSDT
-  - XRPUSDT
-  - ENAUSDT
-  - 1000PEPEUSDT
+  - BTCUSDT
+  - SOLUSDT
   stake_percent: 0.02
   symbols:
-  - ETH/USDT
-  - ADA/USDT
-  - SOL/USDT
-  - BNB/USDT
-  - SUI/USDT
-  - XRP/USDT
-  - ENA/USDT
-  - MDT/USDT
-  - PEPE/USDT
+  - ETHUSDT
+  - BNBUSDT
+  - BTCUSDT
+  - SOLUSDT
   timeframe: 1m
