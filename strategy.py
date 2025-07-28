@@ -94,7 +94,7 @@ class BaseStrategy:
         loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
         rs = gain / (loss + 1e-9)
         return 100 - (100 / (1 + rs))
-
+    
 class SpotLongStrategy(BaseStrategy):
     """
     Strategie für Long-Trades auf Spot-Märkten
@@ -339,3 +339,124 @@ class SpotLongStrategy(BaseStrategy):
                 'rsi_pct_of_threshold': rsi_pct_of_threshold
             }
 
+class FuturesShortStrategy(BaseStrategy):
+    """
+    Strategie für Short-Trades auf Futures-Märkten
+    """
+
+    def should_exit_momentum(self, df: pd.DataFrame) -> bool:
+        """
+        Gibt True zurück, wenn der RSI über den Momentum-Exit-Schwellenwert steigt (z.B. für Short-Exits).
+        Args:
+            df: DataFrame mit Marktdaten
+        Returns:
+            bool: True, wenn Momentum-Exit-Bedingung erfüllt
+        """
+        df = self.ensure_rsi_column(df)
+        rsi = df[self.COL_RSI].iloc[-1]
+        if pd.isnull(rsi):
+            self.data.save_log(LOG_WARN, 'FuturesShortStrategy', 'should_exit_momentum', f"RSI ist NaN in should_exit_momentum.")
+            return False
+        return rsi > self.momentum_exit_rsi
+
+    def get_trailing_stop(self, entry: float, current_price: float) -> Optional[float]:
+        """
+        Gibt den neuen Stop-Loss zurück, falls Trailing-Stop-Bedingung erfüllt ist, sonst None.
+        Args:
+            entry: Einstiegswert
+            current_price: aktueller Preis
+        Returns:
+            Optional[float]: Neuer Stop-Loss oder None
+        """
+        profit_pct = (entry - current_price) / entry
+        if profit_pct >= self.trailing_trigger_pct:
+            return entry
+        return None
+
+    def evaluate_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Liefert für die aktuelle Kerze alle Trade- und Signalinfos als Dict zurück.
+        Erwartet ein DataFrame mit Spalten: ['close', 'volume'] (und optional 'timestamp').
+        Gibt ein Dict zurück mit: signal, signal_type, entry, stop_loss, take_profit, volume, price_change, volume_score, rsi
+        Beispiel:
+            {
+                'signal': True,
+                'signal_type': 'short',
+                'entry': 123.45,
+                'stop_loss': 130.0,
+                'take_profit': 110.0,
+                'volume': 0.1,
+                'price_change': -0.04,
+                'volume_score': 2.1,
+                'rsi': 35.0
+            }
+        """
+        df = df.tail(self.price_change_periods + 2).copy()
+        for col in [self.COL_CLOSE, self.COL_VOLUME]:
+            if col not in df.columns:
+                raise ValueError(f"DataFrame muss Spalte '{col}' enthalten!")
+        df[self.COL_PRICE_CHANGE] = df[self.COL_CLOSE].pct_change(periods=self.price_change_periods)
+        df[self.COL_VOL_MEAN] = df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
+        df = self.ensure_rsi_column(df)
+        df[self.COL_VOLUME_SCORE] = df[self.COL_VOLUME] / df[self.COL_VOL_MEAN].replace(0, float('nan'))
+        last = df.iloc[-1]
+        price_change = last[self.COL_PRICE_CHANGE] if pd.notnull(last[self.COL_PRICE_CHANGE]) else 0.0
+        vol_mean = last[self.COL_VOL_MEAN] if pd.notnull(last[self.COL_VOL_MEAN]) and last[self.COL_VOL_MEAN] != 0 else 1.0
+        volume_score = last[self.COL_VOLUME] / vol_mean if vol_mean else 0.0
+        rsi = last[self.COL_RSI] if pd.notnull(last[self.COL_RSI]) else 0.0
+        if any(pd.isnull([price_change, vol_mean, volume_score, rsi])):
+            self.data.save_log(LOG_WARN, 'FuturesShortStrategy', 'evaluate_signal', f"NaN in Signalberechnung: price_change={price_change}, vol_mean={vol_mean}, volume_score={volume_score}, rsi={rsi}")
+        signal = (
+            price_change < -self.price_change_pct and
+            last[self.COL_VOLUME] > self.volume_mult * vol_mean and
+            rsi < self.rsi_short
+        )
+        if signal:
+            entry = last[self.COL_CLOSE]
+            stop_loss = entry * (1 + self.stop_loss_pct)
+            take_profit = entry * (1 - self.take_profit_pct)
+        price_change_threshold = self.price_change_pct
+        volume_score_threshold = self.volume_mult
+        rsi_threshold = self.rsi_short
+        price_change_pct_of_threshold = price_change / price_change_threshold if price_change_threshold else None
+        volume_score_pct_of_threshold = volume_score / volume_score_threshold if volume_score_threshold else None
+        rsi_pct_of_threshold = rsi / rsi_threshold if rsi_threshold else None
+        if signal:
+            entry = last[self.COL_CLOSE]
+            stop_loss = entry * (1 + self.stop_loss_pct)
+            take_profit = entry * (1 - self.take_profit_pct)
+            return {
+                'signal': True,
+                'signal_type': 'short',
+                'entry': entry,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'volume': last[self.COL_VOLUME],
+                'price_change': price_change,
+                'price_change_threshold': price_change_threshold,
+                'price_change_pct_of_threshold': price_change_pct_of_threshold,
+                'volume_score': volume_score,
+                'volume_score_threshold': volume_score_threshold,
+                'volume_score_pct_of_threshold': volume_score_pct_of_threshold,
+                'rsi': rsi,
+                'rsi_threshold': rsi_threshold,
+                'rsi_pct_of_threshold': rsi_pct_of_threshold
+            }
+        else:
+            return {
+                'signal': False,
+                'signal_type': None,
+                'entry': None,
+                'stop_loss': None,
+                'take_profit': None,
+                'volume': None,
+                'price_change': price_change,
+                'price_change_threshold': price_change_threshold,
+                'price_change_pct_of_threshold': price_change_pct_of_threshold,
+                'volume_score': volume_score,
+                'volume_score_threshold': volume_score_threshold,
+                'volume_score_pct_of_threshold': volume_score_pct_of_threshold,
+                'rsi': rsi,
+                'rsi_threshold': rsi_threshold,
+                'rsi_pct_of_threshold': rsi_pct_of_threshold
+            }

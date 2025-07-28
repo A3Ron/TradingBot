@@ -322,7 +322,7 @@ class DataFetcher:
             return []
         
 
-    def load_trades(self, limit: int = 1000) -> pd.DataFrame:
+    def load_trades(self, limit: int = 1000, transaction_id: str = None) -> pd.DataFrame:
         """Lädt Trades aus der Datenbank."""
         session = self.get_session()
         try:
@@ -338,7 +338,7 @@ class DataFetcher:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df
         except Exception as e:
-            self.save_log('ERROR', 'data', 'load_trades', f"Trades DB-Load fehlgeschlagen: {e}")
+            self.save_log('ERROR', 'data', 'load_trades', f"Trades DB-Load fehlgeschlagen: {e}", transaction_id or str(uuid.uuid4()))
             return pd.DataFrame()
         finally:
             session.close()
