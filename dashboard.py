@@ -232,6 +232,7 @@ with st.expander("Bot Einstellungen", expanded=False):
         for sym in futures_db_symbols:
             dfetcher.select_symbol(sym, 'futures', selected=(sym in selected_futures_symbols))
         st.success('Symbol-Auswahl in der Datenbank gespeichert!')
+        st.experimental_rerun()
     st.write({
         "Spot Symbole (DB)": selected_spot_symbols,
         "Futures Symbole (DB)": selected_futures_symbols,
