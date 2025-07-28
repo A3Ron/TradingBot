@@ -83,8 +83,6 @@ except Exception as e:
     dfetcher.save_log('ERROR', 'main', 'init', f'Fehler beim Laden der Config/DataFetcher: {e}', str(uuid.uuid4()))
 
 
-
-
 # --- Initiales Symbol-Update beim Start ---
 dfetcher.update_symbols_from_binance()
 
@@ -116,25 +114,6 @@ elif futures_traders:
     # Sonst über den ersten Futures-Trader
     list(futures_traders.values())[0].send_telegram(startup_msg)
 
-
-# --- Mapping für Timeframe zu Sekunden ---
-def timeframe_to_seconds(tf):
-    match = re.match(r"(\d+)([smhd])", tf.strip())
-    if not match:
-        return 60  # Default: 60 Sekunden
-    value, unit = int(match.group(1)), match.group(2)
-    if unit == 's':
-        return value
-    elif unit == 'm':
-        return value * 60
-    elif unit == 'h':
-        return value * 3600
-    elif unit == 'd':
-        return value * 86400
-    return 60
-
-main_sleep_seconds = timeframe_to_seconds(config['trading'].get('timeframe', '1m'))
-
 # --- Hauptloop ---
 while True:
     transaction_id = str(uuid.uuid4())
@@ -154,9 +133,9 @@ while True:
         dfetcher.save_log('DEBUG', 'main', 'main_loop', 'Bearbeite Futures-Trades...', transaction_id)
         for symbol, trader in futures_traders.items():
             trader.handle_trades(futures_strategy, transaction_id=transaction_id)
-        dfetcher.save_log('DEBUG', 'main', 'main_loop', f'Loop fertig, warte {main_sleep_seconds} Sekunden.', transaction_id)
-        time.sleep(main_sleep_seconds)
+        dfetcher.save_log('DEBUG', 'main', 'main_loop', f'Loop fertig, warte {30} Sekunden.', transaction_id)
+        time.sleep(30)  # Kurze Pause vor dem nächsten Loop
     except Exception as e:
         dfetcher.save_log('ERROR', 'main', 'main_loop', f"Error: {e}", transaction_id)
-        time.sleep(main_sleep_seconds)
+        time.sleep(30)  # Kurze Pause vor dem nächsten Loop
 

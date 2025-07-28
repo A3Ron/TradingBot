@@ -96,7 +96,9 @@ class BaseStrategy:
         return 100 - (100 / (1 + rs))
     
 class SpotLongStrategy(BaseStrategy):
-
+    """
+    Strategie für Long-Trades auf Spot-Märkten
+    """
     def evaluate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Berechnet für alle Zeilen im DataFrame die Analytics- und Signalspalten (Long-Logik).
@@ -123,9 +125,6 @@ class SpotLongStrategy(BaseStrategy):
             (df[self.COL_RSI] > self.rsi_long)
         )
         return df
-    """
-    Strategie für Long-Trades auf Spot-Märkten
-    """
 
     def should_exit_momentum(self, df: pd.DataFrame) -> bool:
         """

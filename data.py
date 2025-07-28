@@ -625,42 +625,7 @@ class DataFetcher:
         except Exception as e:
             self.save_log('ERROR', 'data', 'get_futures_symbols', f"Futures-Symbole konnten nicht geladen werden: {e}", transaction_id or str(uuid.uuid4()))
             return []
-
-    def _init_exchange(self, market_type='spot'):
-        """Initialisiert self.exchange für Spot oder Futures."""
-        mode = os.environ.get('MODE', 'live')
-        if market_type == 'futures':
-            options = {'defaultType': 'future', 'contractType': 'PERPETUAL'}
-        else:
-            options = {'defaultType': 'spot'}
-        if mode == 'testnet':
-            api_key = os.getenv('BINANCE_API_KEY_TEST')
-            api_secret = os.getenv('BINANCE_API_SECRET_TEST')
-            urls = None
-            if market_type == 'spot':
-                urls = {
-                    'api': {
-                        'public': 'https://testnet.binance.vision/api',
-                    }
-                }
-            self.exchange = ccxt.binance({
-                'apiKey': api_key,
-                'secret': api_secret,
-                'enableRateLimit': True,
-                'options': options,
-                **({'urls': urls} if urls else {})
-            })
-            self.exchange.set_sandbox_mode(True)
-        else:
-            api_key = os.getenv('BINANCE_API_KEY')
-            api_secret = os.getenv('BINANCE_API_SECRET')
-            self.exchange = ccxt.binance({
-                'apiKey': api_key,
-                'secret': api_secret,
-                'enableRateLimit': True,
-                'options': options,
-            })
-            
+        
     def fetch_and_save_ohlcv(self, symbols: list, market_type: str, transaction_id: str, strategy, limit: int = 50) -> None:
         """
         Lädt OHLCV-Daten für eine Liste von Symbolen, berechnet Analytics/Signale per Strategie und speichert alles in die DB.
@@ -673,7 +638,7 @@ class DataFetcher:
         if self.config and 'trading' in self.config and 'timeframe' in self.config['trading']:
             timeframe = self.config['trading']['timeframe']
         else:
-            timeframe = '1h'
+            raise ValueError("config['trading']['timeframe'] ist Pflicht für fetch_and_save_ohlcv")
         for symbol in symbols:
             try:
                 self._init_exchange(market_type=market_type)
