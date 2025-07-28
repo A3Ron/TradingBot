@@ -34,7 +34,12 @@ class BaseTrader:
             eval_result = strategy.evaluate_signal(df)
             # Speichere das aktuelle Signal gezielt für die letzte Kerze
             signal_row = df.iloc[[-1]].copy()
-            for key in ['signal', 'price_change', 'volume_score', 'rsi']:
+            # Alle relevanten Felder aus eval_result übernehmen
+            for key in [
+                'signal',
+                'price_change', 'price_change_threshold', 'price_change_pct_of_threshold',
+                'volume_score', 'volume_score_threshold', 'volume_score_pct_of_threshold',
+                'rsi', 'rsi_threshold', 'rsi_pct_of_threshold']:
                 val = eval_result.get(key)
                 signal_row[key] = val
             self.data.save_signals(signal_row, self.symbol, market_type, transaction_id)

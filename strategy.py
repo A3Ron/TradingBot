@@ -175,6 +175,17 @@ class SpotLongStrategy(BaseStrategy):
             entry = last[self.COL_CLOSE]
             stop_loss = entry * (1 - self.stop_loss_pct)
             take_profit = entry * (1 + self.take_profit_pct)
+        # Schwellenwerte und Prozentwerte berechnen
+        price_change_threshold = self.price_change_pct
+        volume_score_threshold = self.volume_mult
+        rsi_threshold = self.rsi_long
+        price_change_pct_of_threshold = price_change / price_change_threshold if price_change_threshold else None
+        volume_score_pct_of_threshold = volume_score / volume_score_threshold if volume_score_threshold else None
+        rsi_pct_of_threshold = rsi / rsi_threshold if rsi_threshold else None
+        if signal:
+            entry = last[self.COL_CLOSE]
+            stop_loss = entry * (1 - self.stop_loss_pct)
+            take_profit = entry * (1 + self.take_profit_pct)
             return {
                 'signal': True,
                 'signal_type': 'long',
@@ -183,8 +194,14 @@ class SpotLongStrategy(BaseStrategy):
                 'take_profit': take_profit,
                 'volume': last[self.COL_VOLUME],
                 'price_change': price_change,
+                'price_change_threshold': price_change_threshold,
+                'price_change_pct_of_threshold': price_change_pct_of_threshold,
                 'volume_score': volume_score,
-                'rsi': rsi
+                'volume_score_threshold': volume_score_threshold,
+                'volume_score_pct_of_threshold': volume_score_pct_of_threshold,
+                'rsi': rsi,
+                'rsi_threshold': rsi_threshold,
+                'rsi_pct_of_threshold': rsi_pct_of_threshold
             }
         else:
             return {
@@ -195,15 +212,15 @@ class SpotLongStrategy(BaseStrategy):
                 'take_profit': None,
                 'volume': None,
                 'price_change': price_change,
+                'price_change_threshold': price_change_threshold,
+                'price_change_pct_of_threshold': price_change_pct_of_threshold,
                 'volume_score': volume_score,
-                'rsi': rsi
+                'volume_score_threshold': volume_score_threshold,
+                'volume_score_pct_of_threshold': volume_score_pct_of_threshold,
+                'rsi': rsi,
+                'rsi_threshold': rsi_threshold,
+                'rsi_pct_of_threshold': rsi_pct_of_threshold
             }
-
-
-class FuturesShortStrategy(BaseStrategy):
-    """
-    Strategie für Short-Trades auf Futures-Märkten
-    """
 
     def should_exit_momentum(self, df: pd.DataFrame) -> bool:
         """
@@ -276,6 +293,16 @@ class FuturesShortStrategy(BaseStrategy):
             entry = last[self.COL_CLOSE]
             stop_loss = entry * (1 + self.stop_loss_pct)
             take_profit = entry * (1 - self.take_profit_pct)
+        price_change_threshold = self.price_change_pct
+        volume_score_threshold = self.volume_mult
+        rsi_threshold = self.rsi_short
+        price_change_pct_of_threshold = price_change / price_change_threshold if price_change_threshold else None
+        volume_score_pct_of_threshold = volume_score / volume_score_threshold if volume_score_threshold else None
+        rsi_pct_of_threshold = rsi / rsi_threshold if rsi_threshold else None
+        if signal:
+            entry = last[self.COL_CLOSE]
+            stop_loss = entry * (1 + self.stop_loss_pct)
+            take_profit = entry * (1 - self.take_profit_pct)
             return {
                 'signal': True,
                 'signal_type': 'short',
@@ -284,8 +311,14 @@ class FuturesShortStrategy(BaseStrategy):
                 'take_profit': take_profit,
                 'volume': last[self.COL_VOLUME],
                 'price_change': price_change,
+                'price_change_threshold': price_change_threshold,
+                'price_change_pct_of_threshold': price_change_pct_of_threshold,
                 'volume_score': volume_score,
-                'rsi': rsi
+                'volume_score_threshold': volume_score_threshold,
+                'volume_score_pct_of_threshold': volume_score_pct_of_threshold,
+                'rsi': rsi,
+                'rsi_threshold': rsi_threshold,
+                'rsi_pct_of_threshold': rsi_pct_of_threshold
             }
         else:
             return {
@@ -296,7 +329,13 @@ class FuturesShortStrategy(BaseStrategy):
                 'take_profit': None,
                 'volume': None,
                 'price_change': price_change,
+                'price_change_threshold': price_change_threshold,
+                'price_change_pct_of_threshold': price_change_pct_of_threshold,
                 'volume_score': volume_score,
-                'rsi': rsi
+                'volume_score_threshold': volume_score_threshold,
+                'volume_score_pct_of_threshold': volume_score_pct_of_threshold,
+                'rsi': rsi,
+                'rsi_threshold': rsi_threshold,
+                'rsi_pct_of_threshold': rsi_pct_of_threshold
             }
 

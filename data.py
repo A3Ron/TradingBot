@@ -42,8 +42,14 @@ def create_tables(engine):
         Column('volume', Float),
         Column('signal', Boolean, index=True),
         Column('price_change', Float),
+        Column('price_change_threshold', Float),
+        Column('price_change_pct_of_threshold', Float),
         Column('volume_score', Float),
+        Column('volume_score_threshold', Float),
+        Column('volume_score_pct_of_threshold', Float),
         Column('rsi', Float),
+        Column('rsi_threshold', Float),
+        Column('rsi_pct_of_threshold', Float),
         sqlalchemy.schema.UniqueConstraint('symbol_id', 'market_type', 'timestamp', name='uix_ohlcv')
     )
     Table('trades', meta,
@@ -527,7 +533,7 @@ class DataFetcher:
             session.close()
 
     def save_signals(self, df: pd.DataFrame, symbol: str, market_type: str, transaction_id: str) -> None:
-        """Speichert Signalspalten (signal, price_change, volume_score, rsi) für vorhandene OHLCV-Datensätze. transaction_id ist Pflicht."""
+        """Speichert Signalspalten (inkl. Schwellenwerte und %-of-threshold) für vorhandene OHLCV-Datensätze. transaction_id ist Pflicht."""
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für save_signals")
         if df.empty:
@@ -551,7 +557,11 @@ class DataFetcher:
                     dict(symbol_id=symbol_id, market_type=market_type, timestamp=row['timestamp'])
                 ).first()
                 if exists:
-                    update_dict = {k: row.get(k, None) for k in ['signal', 'price_change', 'volume_score', 'rsi']}
+                    update_dict = {k: row.get(k, None) for k in [
+                        'signal',
+                        'price_change', 'price_change_threshold', 'price_change_pct_of_threshold',
+                        'volume_score', 'volume_score_threshold', 'volume_score_pct_of_threshold',
+                        'rsi', 'rsi_threshold', 'rsi_pct_of_threshold']}
                     # Signal explizit in bool oder None umwandeln
                     val = row.get('signal', None)
                     if pd.isna(val):
@@ -560,7 +570,17 @@ class DataFetcher:
                         update_dict['signal'] = bool(val)
                     update_dict['id'] = exists.id
                     session.execute(sqlalchemy.text("""
-                        UPDATE ohlcv SET signal=:signal, price_change=:price_change, volume_score=:volume_score, rsi=:rsi
+                        UPDATE ohlcv SET 
+                            signal=:signal,
+                            price_change=:price_change,
+                            price_change_threshold=:price_change_threshold,
+                            price_change_pct_of_threshold=:price_change_pct_of_threshold,
+                            volume_score=:volume_score,
+                            volume_score_threshold=:volume_score_threshold,
+                            volume_score_pct_of_threshold=:volume_score_pct_of_threshold,
+                            rsi=:rsi,
+                            rsi_threshold=:rsi_threshold,
+                            rsi_pct_of_threshold=:rsi_pct_of_threshold
                         WHERE id=:id
                     """), update_dict)
             session.commit()
