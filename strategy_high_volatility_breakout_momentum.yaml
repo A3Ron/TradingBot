@@ -3,7 +3,7 @@ risk_percent: 8.0 # Prozent des Kapitals, das pro Trade riskiert wird
 stop_loss_buffer: 0.0 # Buffer für Stop-Loss, um Slippage zu vermeiden
 params:
   stop_loss_pct: 0.03 # 3% Stop-Loss
-  take_profit_pct: 0.08 # 8% Take-Profit
+  take_profit_pct: 0.07 # 7% Take-Profit
   trailing_trigger_pct: 0.02 # Trailing Stop wird bei 2% Gewinn aktiviert
   price_change_pct: 0.0125 # 1.5% Preisänderung für Long-Signal
   price_change_periods: 5 # 5 Perioden für Preisänderung
