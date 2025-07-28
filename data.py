@@ -258,7 +258,8 @@ class DataFetcher:
             session.close()
 
     def _init_exchange(self, market_type: str = 'spot') -> None:
-        """Initialisiert self.exchange für Spot oder Futures."""
+        """Initialisiert self.exchange für Spot oder Futur
+        es."""
         mode = os.environ.get('MODE', 'live')
         if not hasattr(self, 'exchanges'):
             self.exchanges = {}
@@ -378,8 +379,11 @@ class DataFetcher:
         finally:
             session.close()
 
-    def load_ohlcv(self, symbol: str, market_type: str, limit: int = 500) -> pd.DataFrame:
-        """Lädt OHLCV-Daten aus PostgreSQL für ein Symbol (per Name, nicht ID)."""
+    def load_ohlcv(self, symbol: str, market_type: str, limit: int = 1) -> pd.DataFrame:
+        """
+        Lädt OHLCV-Daten inkl. aller Analytics/Signalspalten aus PostgreSQL für ein Symbol (per Name, nicht ID).
+        Standardmäßig wird nur die neueste Kerze geladen (limit=1).
+        """
         session = self.get_session()
         try:
             # Hole symbol_id aus symbols-Tabelle
@@ -389,20 +393,48 @@ class DataFetcher:
             if res:
                 symbol_id = res.id
             if not symbol_id:
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
+                return pd.DataFrame(columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'signal',
+                    'price_change', 'price_change_threshold', 'price_change_pct_of_threshold',
+                    'volume_score', 'volume_score_threshold', 'volume_score_pct_of_threshold',
+                    'rsi', 'rsi_threshold', 'rsi_pct_of_threshold'
+                ])
             rows = session.execute(sqlalchemy.text("""
-                SELECT timestamp, open, high, low, close, volume, signal
+                SELECT timestamp, open, high, low, close, volume,
+                       signal,
+                       price_change, price_change_threshold, price_change_pct_of_threshold,
+                       volume_score, volume_score_threshold, volume_score_pct_of_threshold,
+                       rsi, rsi_threshold, rsi_pct_of_threshold
                 FROM ohlcv WHERE symbol_id=:symbol_id AND market_type=:market_type
                 ORDER BY timestamp DESC LIMIT :limit
             """), dict(symbol_id=symbol_id, market_type=market_type, limit=limit)).fetchall()
             if not rows:
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
-            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
+                return pd.DataFrame(columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'signal',
+                    'price_change', 'price_change_threshold', 'price_change_pct_of_threshold',
+                    'volume_score', 'volume_score_threshold', 'volume_score_pct_of_threshold',
+                    'rsi', 'rsi_threshold', 'rsi_pct_of_threshold'
+                ])
+            df = pd.DataFrame(rows, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'signal',
+                'price_change', 'price_change_threshold', 'price_change_pct_of_threshold',
+                'volume_score', 'volume_score_threshold', 'volume_score_pct_of_threshold',
+                'rsi', 'rsi_threshold', 'rsi_pct_of_threshold'
+            ])
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df.sort_values('timestamp')
         except Exception as e:
             self.save_log('ERROR', 'data', 'load_ohlcv', f"OHLCV DB-Load fehlgeschlagen: {e}")
-            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
+            return pd.DataFrame(columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'signal',
+                'price_change', 'price_change_threshold', 'price_change_pct_of_threshold',
+                'volume_score', 'volume_score_threshold', 'volume_score_pct_of_threshold',
+                'rsi', 'rsi_threshold', 'rsi_pct_of_threshold'
+            ])
         finally:
             session.close()
 
@@ -483,8 +515,12 @@ class DataFetcher:
             assets.append({'asset': asset, 'amount': info, 'price': price, 'value': value})
         return {'assets': assets, 'total_value': total_value, 'prices': prices}
     
+
     def save_ohlcv(self, df: pd.DataFrame, symbol: str, market_type: str, transaction_id: str) -> None:
-        """Speichert OHLCV-Basisdaten (ohne Signalspalten) in PostgreSQL. transaction_id ist Pflicht. Speichert symbol_id statt symbol."""
+        """
+        Speichert OHLCV-Daten inkl. aller Analytics/Signalspalten in PostgreSQL. transaction_id ist Pflicht. Speichert symbol_id statt symbol.
+        Alle relevanten Spalten (open, high, low, close, volume, signal, price_change, ... rsi_pct_of_threshold) werden direkt mitgespeichert oder aktualisiert.
+        """
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für save_ohlcv")
         if df.empty:
@@ -506,71 +542,28 @@ class DataFetcher:
                     """),
                     dict(symbol_id=symbol_id, market_type=market_type, timestamp=row['timestamp'])
                 ).first()
-                # Generate UUID for new row if needed
-                if exists:
-                    update_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume']}
-                    update_dict['id'] = exists.id
-                    session.execute(sqlalchemy.text("""
-                        UPDATE ohlcv SET open=:open, high=:high, low=:low, close=:close, volume=:volume
-                        WHERE id=:id
-                    """), update_dict)
+                # Alle relevanten Spalten für Analytics/Signale
+                analytics_cols = [
+                    'signal',
+                    'price_change', 'price_change_threshold', 'price_change_pct_of_threshold',
+                    'volume_score', 'volume_score_threshold', 'volume_score_pct_of_threshold',
+                    'rsi', 'rsi_threshold', 'rsi_pct_of_threshold'
+                ]
+                base_cols = ['open', 'high', 'low', 'close', 'volume']
+                all_cols = base_cols + analytics_cols
+                # Dict für Update/Insert bauen
+                row_dict = {k: row.get(k, None) for k in all_cols}
+                # Signal explizit in bool oder None umwandeln
+                val = row.get('signal', None)
+                if pd.isna(val):
+                    row_dict['signal'] = None
                 else:
-                    insert_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume']}
-                    insert_dict['symbol_id'] = symbol_id
-                    insert_dict['market_type'] = market_type
-                    insert_dict['timestamp'] = row['timestamp']
-                    insert_dict['id'] = str(uuid.uuid4())
-                    insert_dict['transaction_id'] = transaction_id
-                    session.execute(sqlalchemy.text("""
-                        INSERT INTO ohlcv (id, transaction_id, symbol_id, market_type, timestamp, open, high, low, close, volume)
-                        VALUES (:id, :transaction_id, :symbol_id, :market_type, :timestamp, :open, :high, :low, :close, :volume)
-                    """), insert_dict)
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV DB-Save fehlgeschlagen: {e}", transaction_id)
-        finally:
-            session.close()
-
-    def save_signals(self, df: pd.DataFrame, symbol: str, market_type: str, transaction_id: str) -> None:
-        """Speichert Signalspalten (inkl. Schwellenwerte und %-of-threshold) für vorhandene OHLCV-Datensätze. transaction_id ist Pflicht."""
-        if not transaction_id:
-            raise ValueError("transaction_id ist Pflicht für save_signals")
-        if df.empty:
-            return
-        session = self.get_session()
-        try:
-            # Hole symbol_id aus symbols-Tabelle
-            symbol_id = None
-            sym_table = self.get_symbols_table()
-            res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol)).fetchone()
-            if res:
-                symbol_id = res.id
-            if not symbol_id:
-                raise ValueError(f"Symbol {symbol} nicht in symbols-Tabelle gefunden!")
-            for _, row in df.iterrows():
-                # Update only if row exists
-                exists = session.execute(
-                    sqlalchemy.text("""
-                        SELECT id FROM ohlcv WHERE symbol_id=:symbol_id AND market_type=:market_type AND timestamp=:timestamp
-                    """),
-                    dict(symbol_id=symbol_id, market_type=market_type, timestamp=row['timestamp'])
-                ).first()
+                    row_dict['signal'] = bool(val)
                 if exists:
-                    update_dict = {k: row.get(k, None) for k in [
-                        'signal',
-                        'price_change', 'price_change_threshold', 'price_change_pct_of_threshold',
-                        'volume_score', 'volume_score_threshold', 'volume_score_pct_of_threshold',
-                        'rsi', 'rsi_threshold', 'rsi_pct_of_threshold']}
-                    # Signal explizit in bool oder None umwandeln
-                    val = row.get('signal', None)
-                    if pd.isna(val):
-                        update_dict['signal'] = None
-                    else:
-                        update_dict['signal'] = bool(val)
-                    update_dict['id'] = exists.id
-                    session.execute(sqlalchemy.text("""
-                        UPDATE ohlcv SET 
+                    row_dict['id'] = exists.id
+                    session.execute(sqlalchemy.text(f"""
+                        UPDATE ohlcv SET
+                            open=:open, high=:high, low=:low, close=:close, volume=:volume,
                             signal=:signal,
                             price_change=:price_change,
                             price_change_threshold=:price_change_threshold,
@@ -582,13 +575,37 @@ class DataFetcher:
                             rsi_threshold=:rsi_threshold,
                             rsi_pct_of_threshold=:rsi_pct_of_threshold
                         WHERE id=:id
-                    """), update_dict)
+                    """), row_dict)
+                else:
+                    row_dict['symbol_id'] = symbol_id
+                    row_dict['market_type'] = market_type
+                    row_dict['timestamp'] = row['timestamp']
+                    row_dict['id'] = str(uuid.uuid4())
+                    row_dict['transaction_id'] = transaction_id
+                    session.execute(sqlalchemy.text(f"""
+                        INSERT INTO ohlcv (
+                            id, transaction_id, symbol_id, market_type, timestamp,
+                            open, high, low, close, volume,
+                            signal,
+                            price_change, price_change_threshold, price_change_pct_of_threshold,
+                            volume_score, volume_score_threshold, volume_score_pct_of_threshold,
+                            rsi, rsi_threshold, rsi_pct_of_threshold
+                        ) VALUES (
+                            :id, :transaction_id, :symbol_id, :market_type, :timestamp,
+                            :open, :high, :low, :close, :volume,
+                            :signal,
+                            :price_change, :price_change_threshold, :price_change_pct_of_threshold,
+                            :volume_score, :volume_score_threshold, :volume_score_pct_of_threshold,
+                            :rsi, :rsi_threshold, :rsi_pct_of_threshold
+                        )
+                    """), row_dict)
             session.commit()
         except Exception as e:
             session.rollback()
-            self.save_log('ERROR', 'data', 'save_signals', f"Signal-Update DB-Save fehlgeschlagen: {e}", transaction_id)
+            self.save_log('ERROR', 'data', 'save_ohlcv', f"OHLCV DB-Save fehlgeschlagen: {e}", transaction_id)
         finally:
             session.close()
+
 
     def get_futures_symbols(self, transaction_id: str = None) -> list:
         try:
@@ -644,12 +661,19 @@ class DataFetcher:
                 'options': options,
             })
             
-    def fetch_and_save_ohlcv(self, symbols: list, market_type: str, transaction_id: str, limit: int = 50) -> None:
-        """Lädt und speichert OHLCV-Basisdaten für eine Liste von Symbolen. transaction_id ist Pflicht."""
+    def fetch_and_save_ohlcv(self, symbols: list, market_type: str, transaction_id: str, strategy, limit: int = 50) -> None:
+        """
+        Lädt OHLCV-Daten für eine Liste von Symbolen, berechnet Analytics/Signale per Strategie und speichert alles in die DB.
+        transaction_id ist Pflicht. strategy muss ein Objekt mit evaluate_signals(df) sein.
+        """
         if not transaction_id:
-            raise ValueError("transaction_id ist Pflicht für fetch_and_save_ohlcv_for_symbols")
+            raise ValueError("transaction_id ist Pflicht für fetch_and_save_ohlcv")
+        if strategy is None:
+            raise ValueError("strategy ist Pflicht für fetch_and_save_ohlcv")
         if self.config and 'trading' in self.config and 'timeframe' in self.config['trading']:
             timeframe = self.config['trading']['timeframe']
+        else:
+            timeframe = '1h'
         for symbol in symbols:
             try:
                 self._init_exchange(market_type=market_type)
@@ -657,12 +681,13 @@ class DataFetcher:
                 self.timeframe = timeframe
                 df = self.fetch_ohlcv(limit=limit)
                 if not df.empty:
-                    self.save_ohlcv(df, symbol, market_type, transaction_id)
-                    self.save_log('INFO', 'data', 'fetch_and_save_ohlcv_for_symbols', f"OHLCV für {symbol} ({market_type}) gespeichert. Zeilen: {len(df)}", transaction_id)
+                    analytics_df = strategy.evaluate_signals(df)
+                    self.save_ohlcv(analytics_df, symbol, market_type, transaction_id)
+                    self.save_log('INFO', 'data', 'fetch_and_save_ohlcv', f"OHLCV+Analytics für {symbol} ({market_type}) gespeichert. Zeilen: {len(analytics_df)}", transaction_id)
                 else:
-                    self.save_log('WARNING', 'data', 'fetch_and_save_ohlcv_for_symbols', f"Keine OHLCV-Daten für {symbol} ({market_type}) geladen.", transaction_id)
+                    self.save_log('WARNING', 'data', 'fetch_and_save_ohlcv', f"Keine OHLCV-Daten für {symbol} ({market_type}) geladen.", transaction_id)
             except Exception as e:
-                self.save_log('ERROR', 'data', 'fetch_and_save_ohlcv_for_symbols', f"Fehler beim Laden/Speichern von OHLCV für {symbol} ({market_type}): {e}", transaction_id)
+                self.save_log('ERROR', 'data', 'fetch_and_save_ohlcv', f"Fehler beim Laden/Speichern von OHLCV+Analytics für {symbol} ({market_type}): {e}", transaction_id)
 
     def fetch_ohlcv(self, limit: int = 50) -> pd.DataFrame:
         """Lädt OHLCV-Daten für das aktuelle Symbol/Timeframe."""

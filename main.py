@@ -145,9 +145,9 @@ while True:
             dfetcher._last_symbol_update = time.time()
         dfetcher.save_log('DEBUG', 'main', 'main_loop', '--- Starte neuen Loop ---', transaction_id)
         dfetcher.save_log('DEBUG', 'main', 'main_loop', 'Aktualisiere Spot-OHLCV-Daten...', transaction_id)
-        dfetcher.fetch_and_save_ohlcv(spot_symbols, market_type='spot', transaction_id=transaction_id, limit=50)
+        dfetcher.fetch_and_save_ohlcv(spot_symbols, market_type='spot', transaction_id=transaction_id, strategy=spot_strategy, limit=50)
         dfetcher.save_log('DEBUG', 'main', 'main_loop', 'Aktualisiere Futures-OHLCV-Daten...', transaction_id)
-        dfetcher.fetch_and_save_ohlcv(futures_symbols, market_type='futures', transaction_id=transaction_id, limit=50)
+        dfetcher.fetch_and_save_ohlcv(futures_symbols, market_type='futures', transaction_id=transaction_id, strategy=futures_strategy, limit=50)
         dfetcher.save_log('DEBUG', 'main', 'main_loop', 'Bearbeite Spot-Trades...', transaction_id)
         for symbol, trader in spot_traders.items():
             trader.handle_trades(spot_strategy, transaction_id=transaction_id)
