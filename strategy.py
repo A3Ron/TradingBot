@@ -133,10 +133,10 @@ class SpotLongStrategy(BaseStrategy):
         """
         Liefert für die aktuelle Kerze alle Trade- und Signalinfos als Dict zurück.
         Erwartet ein DataFrame mit Spalten: ['close', 'volume'] (und optional 'timestamp').
-        Gibt ein Dict zurück mit: trade_signal, signal_type, entry, stop_loss, take_profit, volume, price_change, volume_score, rsi
+        Gibt ein Dict zurück mit: signal, signal_type, entry, stop_loss, take_profit, volume, price_change, volume_score, rsi
         Beispiel:
             {
-                'trade_signal': True,
+                'signal': True,
                 'signal_type': 'long',
                 'entry': 123.45,
                 'stop_loss': 120.0,
@@ -176,7 +176,7 @@ class SpotLongStrategy(BaseStrategy):
             stop_loss = entry * (1 - self.stop_loss_pct)
             take_profit = entry * (1 + self.take_profit_pct)
             return {
-                'trade_signal': True,
+                'signal': True,
                 'signal_type': 'long',
                 'entry': entry,
                 'stop_loss': stop_loss,
@@ -188,7 +188,7 @@ class SpotLongStrategy(BaseStrategy):
             }
         else:
             return {
-                'trade_signal': False,
+                'signal': False,
                 'signal_type': None,
                 'entry': None,
                 'stop_loss': None,
@@ -238,10 +238,10 @@ class FuturesShortStrategy(BaseStrategy):
         """
         Liefert für die aktuelle Kerze alle Trade- und Signalinfos als Dict zurück.
         Erwartet ein DataFrame mit Spalten: ['close', 'volume'] (und optional 'timestamp').
-        Gibt ein Dict zurück mit: trade_signal, signal_type, entry, stop_loss, take_profit, volume, price_change, volume_score, rsi
+        Gibt ein Dict zurück mit: signal, signal_type, entry, stop_loss, take_profit, volume, price_change, volume_score, rsi
         Beispiel:
             {
-                'trade_signal': True,
+                'signal': True,
                 'signal_type': 'short',
                 'entry': 123.45,
                 'stop_loss': 130.0,
@@ -277,7 +277,7 @@ class FuturesShortStrategy(BaseStrategy):
             stop_loss = entry * (1 + self.stop_loss_pct)
             take_profit = entry * (1 - self.take_profit_pct)
             return {
-                'trade_signal': True,
+                'signal': True,
                 'signal_type': 'short',
                 'entry': entry,
                 'stop_loss': stop_loss,
@@ -289,7 +289,7 @@ class FuturesShortStrategy(BaseStrategy):
             }
         else:
             return {
-                'trade_signal': False,
+                'signal': False,
                 'signal_type': None,
                 'entry': None,
                 'stop_loss': None,

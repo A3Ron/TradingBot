@@ -38,7 +38,7 @@ class BaseTrader:
                 val = eval_result.get(key)
                 signal_row[key] = val
             self.data.save_signals(signal_row, self.symbol, market_type, transaction_id)
-            if eval_result.get('trade_signal'):
+            if eval_result.get('signal'):
                 self.data.save_log(LOG_INFO, self.__class__.__name__, 'evaluate_and_store_signal', f"[{market_type.upper()}] Signal erkannt für {self.symbol}: {eval_result}", transaction_id)
                 vol_score = eval_result.get('volume_score', 0) or 0
                 return {

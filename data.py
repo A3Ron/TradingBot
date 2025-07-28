@@ -50,7 +50,7 @@ def create_tables(engine):
         Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
         Column('transaction_id', UUID, index=True),
         Column('parent_trade_id', UUID, index=True),
-        Column('symbol', String(32), index=True),
+        Column('symbol_id', UUID, index=True),
         Column('market_type', String(16), index=True),
         Column('timestamp', DateTime, index=True),
         Column('side', String(8)),
@@ -341,7 +341,7 @@ class DataFetcher:
         return Session()
     
     def save_trade(self, trade_dict: dict, transaction_id: str) -> None:
-        """Speichert einen Trade in der Datenbank. transaction_id ist Pflicht. Generiert UUID falls nicht vorhanden."""
+        """Speichert einen Trade in der Datenbank. transaction_id ist Pflicht. Generiert UUID falls nicht vorhanden. Speichert symbol_id statt symbol."""
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für save_trade")
         session = self.get_session()
@@ -349,9 +349,21 @@ class DataFetcher:
             if 'id' not in trade_dict or not trade_dict['id']:
                 trade_dict['id'] = str(uuid.uuid4())
             trade_dict['transaction_id'] = transaction_id
+            # symbol_id aus symbols-Tabelle holen
+            symbol = trade_dict.get('symbol')
+            if not symbol:
+                raise ValueError("symbol muss im trade_dict vorhanden sein!")
+            sym_table = self.get_symbols_table()
+            res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol)).fetchone()
+            if not res:
+                raise ValueError(f"Symbol {symbol} nicht in symbols-Tabelle gefunden!")
+            trade_dict['symbol_id'] = res.id
+            # symbol-String aus dict entfernen, falls vorhanden
+            if 'symbol' in trade_dict:
+                del trade_dict['symbol']
             session.execute(sqlalchemy.text("""
-                INSERT INTO trades (id, transaction_id, symbol, market_type, timestamp, side, qty, price, fee, profit, order_id, extra)
-                VALUES (:id, :transaction_id, :symbol, :market_type, :timestamp, :side, :qty, :price, :fee, :profit, :order_id, :extra)
+                INSERT INTO trades (id, transaction_id, symbol_id, market_type, timestamp, side, qty, price, fee, profit, order_id, extra)
+                VALUES (:id, :transaction_id, :symbol_id, :market_type, :timestamp, :side, :qty, :price, :fee, :profit, :order_id, :extra)
             """), trade_dict)
             session.commit()
         except Exception as e:
