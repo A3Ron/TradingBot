@@ -73,32 +73,32 @@ try:
         config = yaml.safe_load(f)
     config = resolve_env_vars(config)
     dfetcher = DataFetcher(config)
-    dfetcher.save_log('INFO', 'main', 'init', 'Config und DataFetcher erfolgreich geladen.')
+    dfetcher.save_log('INFO', 'main', 'init', 'Config und DataFetcher erfolgreich geladen.', str(uuid.uuid4()))
 except Exception as e:
-    dfetcher.save_log('ERROR', 'main', 'init', f'Fehler beim Laden der Config/DataFetcher: {e}')
+    dfetcher.save_log('ERROR', 'main', 'init', f'Fehler beim Laden der Config/DataFetcher: {e}', str(uuid.uuid4()))
 
 
 # Symbollisten für Spot (Long) und Futures (Short) aus Config
 spot_symbols = config['trading'].get('symbols', [])
-dfetcher.save_log('INFO', 'main', 'init', f"Spot-Symbole: {spot_symbols}")
+dfetcher.save_log('INFO', 'main', 'init', f"Spot-Symbole: {spot_symbols}", str(uuid.uuid4()))
 futures_symbols = config['trading'].get('futures_symbols', [])
-dfetcher.save_log('INFO', 'main', 'init', f"Futures-Symbole: {futures_symbols}")
+dfetcher.save_log('INFO', 'main', 'init', f"Futures-Symbole: {futures_symbols}", str(uuid.uuid4()))
 
 # Strategie-Instanzen für beide Typen
 strategies = get_strategy(config)
-dfetcher.save_log('INFO', 'main', 'init', f"Strategien geladen: {list(strategies.keys())}")
+dfetcher.save_log('INFO', 'main', 'init', f"Strategien geladen: {list(strategies.keys())}", str(uuid.uuid4()))
 spot_strategy = strategies['spot_long']
 futures_strategy = strategies['futures_short']
 
 # Trader-Instanzen pro Symbol und Typ
 spot_traders = {symbol: SpotLongTrader(config, symbol, data_fetcher=dfetcher) for symbol in spot_symbols}
-dfetcher.save_log('INFO', 'main', 'init', f"Spot-Trader Instanzen: {list(spot_traders.keys())}")
+dfetcher.save_log('INFO', 'main', 'init', f"Spot-Trader Instanzen: {list(spot_traders.keys())}", str(uuid.uuid4()))
 futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=dfetcher) for symbol in futures_symbols}
-dfetcher.save_log('INFO', 'main', 'init', f"Futures-Trader Instanzen: {list(futures_traders.keys())}")
+dfetcher.save_log('INFO', 'main', 'init', f"Futures-Trader Instanzen: {list(futures_traders.keys())}", str(uuid.uuid4()))
 
 # Sende Startnachricht mit wichtigsten Infos (nur einmal)
 startup_msg = format_startup_message(config)
-dfetcher.save_log('INFO', 'main', 'init', 'Startup-Message wird gesendet.')
+dfetcher.save_log('INFO', 'main', 'init', 'Startup-Message wird gesendet.', str(uuid.uuid4()))
 if spot_traders:
     # Sende über den ersten Spot-Trader, falls vorhanden
     list(spot_traders.values())[0].send_telegram(startup_msg)

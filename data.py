@@ -4,7 +4,7 @@ import ccxt
 import pandas as pd
 import sqlalchemy
 from sqlalchemy import (
-    UUID, create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, MetaData, Table, JSON
+    UUID, create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, MetaData, Table, JSON, text
 )
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
@@ -30,7 +30,7 @@ Session = sessionmaker(bind=pg_engine)
 def create_tables(engine):
     meta = MetaData()
     Table('ohlcv', meta,
-        Column('id', UUID, primary_key=True),
+        Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
         Column('transaction_id', UUID, index=True),
         Column('symbol', String(32), index=True),
         Column('market_type', String(16), index=True),
@@ -47,7 +47,7 @@ def create_tables(engine):
         sqlalchemy.schema.UniqueConstraint('symbol', 'market_type', 'timestamp', name='uix_ohlcv')
     )
     Table('trades', meta,
-        Column('id', UUID, primary_key=True),
+        Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
         Column('transaction_id', UUID, index=True),
         Column('parent_trade_id', UUID, index=True),
         Column('symbol', String(32), index=True),
@@ -63,7 +63,7 @@ def create_tables(engine):
         Column('extra', Text)
     )
     Table('symbols', meta,
-        Column('id', UUID, primary_key=True),
+        Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
         Column('symbols', JSON),
         Column('symbol_type', String),
         Column('selected', Boolean),
@@ -83,12 +83,12 @@ def create_tables(engine):
         Column('updated_at', DateTime),
     )
     Table('logs', meta,
-        Column('id', UUID, primary_key=True),
+        Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
         Column('transaction_id', UUID, index=True),
         Column('timestamp', DateTime, index=True),
         Column('level', String(16), index=True),
-        Column('source', String(20)),
-        Column('method', String(20)),
+        Column('source', String(64)),
+        Column('method', String(64)),
         Column('message', Text)
     )
     meta.create_all(engine)
