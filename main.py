@@ -17,7 +17,8 @@ def format_startup_message(config):
     # Symbole aus der Datenbank lesen (selected)
     spot_symbols = [row['symbol'] for row in dfetcher.get_selected_symbols('spot')]
     futures_symbols = [row['symbol'] for row in dfetcher.get_selected_symbols('futures')]
-    symbols = ', '.join(spot_symbols + futures_symbols)
+    spot_symbols_str = ', '.join(spot_symbols) if spot_symbols else '-'
+    futures_symbols_str = ', '.join(futures_symbols) if futures_symbols else '-'
     # Initialisiertes Symbol: erstes Spot-Symbol, sonst erstes Futures-Symbol, sonst leer
     init_symbol = spot_symbols[0] if spot_symbols else (futures_symbols[0] if futures_symbols else '')
     strategy_cfg = {}
@@ -33,7 +34,8 @@ def format_startup_message(config):
     msg = (
         f"TradingBot gestartet!\n"
         f"Modus: {config['execution'].get('mode', '')}\n"
-        f"Symbole: {symbols}\n"
+        f"Spot-Symbole: {spot_symbols_str}\n"
+        f"Futures-Symbole: {futures_symbols_str}\n"
         f"Initialisiertes Symbol: {init_symbol}\n"
         f"Timeframe: {config['trading'].get('timeframe', '')}\n"
         f"Strategie: {strategy_cfg.get('name', 'Unbekannt')}\n"
