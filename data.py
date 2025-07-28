@@ -540,6 +540,12 @@ class DataFetcher:
                 ).first()
                 if exists:
                     update_dict = {k: row.get(k, None) for k in ['signal', 'price_change', 'volume_score', 'rsi']}
+                    # Signal explizit in bool oder None umwandeln
+                    val = row.get('signal', None)
+                    if pd.isna(val):
+                        update_dict['signal'] = None
+                    else:
+                        update_dict['signal'] = bool(val)
                     update_dict['id'] = exists.id
                     session.execute(sqlalchemy.text("""
                         UPDATE ohlcv SET signal=:signal, price_change=:price_change, volume_score=:volume_score, rsi=:rsi
