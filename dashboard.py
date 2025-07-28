@@ -282,6 +282,11 @@ with st.expander("Trade-Statistiken & Auswertung", expanded=False):
 
 # Panel für die zuletzt gefetchten Binance-Daten
 with st.expander("Binance OHLCV Daten", expanded=False):
+    # Stelle sicher, dass die Symbol-Listen im Session-State sind (direkt aus DB, nicht nur aus config)
+    if 'spot_symbols' not in st.session_state:
+        st.session_state['spot_symbols'] = [row['symbol'] for row in dfetcher.get_all_symbols('spot')]
+    if 'futures_symbols' not in st.session_state:
+        st.session_state['futures_symbols'] = [row['symbol'] for row in dfetcher.get_all_symbols('futures')]
     st.subheader("Letzte OHLCV-Daten pro Symbol und Markt-Typ")
     # Auswahl Spot/Futures
     market_type = st.radio("Markt-Typ wählen", ["spot", "futures"], horizontal=True, key="market_type")

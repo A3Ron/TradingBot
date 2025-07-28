@@ -83,9 +83,9 @@ except Exception as e:
 dfetcher.update_symbols_from_binance()
 
 # Symbollisten für Spot (Long) und Futures (Short) aus der Datenbank (nur selected)
-spot_symbols = [row['symbols'][0] for row in dfetcher.get_selected_symbols('spot')]
+spot_symbols = [row['symbol'] for row in dfetcher.get_selected_symbols('spot')]
 dfetcher.save_log('INFO', 'main', 'init', f"Spot-Symbole (DB, selected): {spot_symbols}", str(uuid.uuid4()))
-futures_symbols = [row['symbols'][0] for row in dfetcher.get_selected_symbols('futures')]
+futures_symbols = [row['symbol'] for row in dfetcher.get_selected_symbols('futures')]
 dfetcher.save_log('INFO', 'main', 'init', f"Futures-Symbole (DB, selected): {futures_symbols}", str(uuid.uuid4()))
 
 # Strategie-Instanzen für beide Typen
