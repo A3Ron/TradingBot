@@ -14,8 +14,12 @@ STRATEGY_PATH = 'strategy_high_volatility_breakout_momentum.yaml'
 
 # --- Funktionen ---
 def format_startup_message(config):
-    symbols = ', '.join(config['trading'].get('symbols', []))
-    init_symbol = config['trading'].get('symbol', config['trading'].get('symbols', [''])[0])
+    # Symbole aus der Datenbank lesen (selected)
+    spot_symbols = [row['symbol'] for row in dfetcher.get_selected_symbols('spot')]
+    futures_symbols = [row['symbol'] for row in dfetcher.get_selected_symbols('futures')]
+    symbols = ', '.join(spot_symbols + futures_symbols)
+    # Initialisiertes Symbol: erstes Spot-Symbol, sonst erstes Futures-Symbol, sonst leer
+    init_symbol = spot_symbols[0] if spot_symbols else (futures_symbols[0] if futures_symbols else '')
     strategy_cfg = {}
     try:
         with open(STRATEGY_PATH, encoding="utf-8") as f:
