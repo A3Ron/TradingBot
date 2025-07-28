@@ -522,13 +522,21 @@ class DataFetcher:
             return
         session = self.get_session()
         try:
+            # Hole symbol_id aus symbols-Tabelle
+            symbol_id = None
+            sym_table = self.get_symbols_table()
+            res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol)).fetchone()
+            if res:
+                symbol_id = res.id
+            if not symbol_id:
+                raise ValueError(f"Symbol {symbol} nicht in symbols-Tabelle gefunden!")
             for _, row in df.iterrows():
                 # Update only if row exists
                 exists = session.execute(
                     sqlalchemy.text("""
-                        SELECT id FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type AND timestamp=:timestamp
+                        SELECT id FROM ohlcv WHERE symbol_id=:symbol_id AND market_type=:market_type AND timestamp=:timestamp
                     """),
-                    dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'])
+                    dict(symbol_id=symbol_id, market_type=market_type, timestamp=row['timestamp'])
                 ).first()
                 if exists:
                     update_dict = {k: row.get(k, None) for k in ['signal', 'price_change', 'volume_score', 'rsi']}
