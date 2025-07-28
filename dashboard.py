@@ -303,6 +303,7 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         # Zeitraum-Optionen
         time_ranges = {
             "5m": timedelta(minutes=5),
+            "15m": timedelta(minutes=15),
             "1h": timedelta(hours=1),
             "24h": timedelta(hours=24)
         }
@@ -310,8 +311,11 @@ with st.expander("Binance OHLCV Daten", expanded=False):
         if 'selected_range' not in st.session_state or st.session_state['selected_range'] not in time_range_keys:
             st.session_state['selected_range'] = time_range_keys[1]
         selected_range = st.selectbox("Zeitraum", time_range_keys, key='selected_range')
+        # Mapping von Zeitraum auf Kerzenanzahl (limit)
+        range_to_limit = {"5m": 5, "15m": 15, "1h": 60, "24h": 1440}
+        limit = range_to_limit.get(selected_range, 60)
         # OHLCV-Daten über DataFetcher laden
-        ohlcv_df = dfetcher.load_ohlcv(selected_symbol, market_type)
+        ohlcv_df = dfetcher.load_ohlcv(selected_symbol, market_type, limit=limit)
         if ohlcv_df is None or ohlcv_df.empty:
             st.info("Keine OHLCV-Daten für dieses Symbol/Markt-Typ geladen oder Datei ist leer.")
         else:
