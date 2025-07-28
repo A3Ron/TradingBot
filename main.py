@@ -1,4 +1,3 @@
-
 import os
 import uuid
 import yaml
@@ -78,11 +77,16 @@ except Exception as e:
     dfetcher.save_log('ERROR', 'main', 'init', f'Fehler beim Laden der Config/DataFetcher: {e}', str(uuid.uuid4()))
 
 
-# Symbollisten für Spot (Long) und Futures (Short) aus Config
-spot_symbols = config['trading'].get('symbols', [])
-dfetcher.save_log('INFO', 'main', 'init', f"Spot-Symbole: {spot_symbols}", str(uuid.uuid4()))
-futures_symbols = config['trading'].get('futures_symbols', [])
-dfetcher.save_log('INFO', 'main', 'init', f"Futures-Symbole: {futures_symbols}", str(uuid.uuid4()))
+
+
+# --- Initiales Symbol-Update beim Start ---
+dfetcher.update_symbols_from_binance()
+
+# Symbollisten für Spot (Long) und Futures (Short) aus der Datenbank (nur selected)
+spot_symbols = [row['symbols'][0] for row in dfetcher.get_selected_symbols('spot')]
+dfetcher.save_log('INFO', 'main', 'init', f"Spot-Symbole (DB, selected): {spot_symbols}", str(uuid.uuid4()))
+futures_symbols = [row['symbols'][0] for row in dfetcher.get_selected_symbols('futures')]
+dfetcher.save_log('INFO', 'main', 'init', f"Futures-Symbole (DB, selected): {futures_symbols}", str(uuid.uuid4()))
 
 # Strategie-Instanzen für beide Typen
 strategies = get_strategy(config)
@@ -110,13 +114,15 @@ elif futures_traders:
 while True:
     transaction_id = str(uuid.uuid4())
     try:
+        # Alle 12h Symbol-Update von Binance (und beim Start)
+        if not hasattr(dfetcher, '_last_symbol_update') or (time.time() - getattr(dfetcher, '_last_symbol_update', 0)) > 43200:
+            dfetcher.update_symbols_from_binance()
+            dfetcher._last_symbol_update = time.time()
         dfetcher.save_log('DEBUG', 'main', 'main_loop', '--- Starte neuen Loop ---', transaction_id)
-        # OHLCV-Daten für alle Symbole vor jedem Loop aktualisieren
         dfetcher.save_log('DEBUG', 'main', 'main_loop', 'Aktualisiere Spot-OHLCV-Daten...', transaction_id)
         dfetcher.fetch_and_save_ohlcv(spot_symbols, market_type='spot', transaction_id=transaction_id, limit=50)
         dfetcher.save_log('DEBUG', 'main', 'main_loop', 'Aktualisiere Futures-OHLCV-Daten...', transaction_id)
         dfetcher.fetch_and_save_ohlcv(futures_symbols, market_type='futures', transaction_id=transaction_id, limit=50)
-
         dfetcher.save_log('DEBUG', 'main', 'main_loop', 'Bearbeite Spot-Trades...', transaction_id)
         for symbol, trader in spot_traders.items():
             trader.handle_trades(spot_strategy, transaction_id=transaction_id)

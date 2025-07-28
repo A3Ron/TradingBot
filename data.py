@@ -32,7 +32,7 @@ def create_tables(engine):
     Table('ohlcv', meta,
         Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
         Column('transaction_id', UUID, index=True),
-        Column('symbol', String(32), index=True),
+        Column('symbol_id', UUID, index=True),
         Column('market_type', String(16), index=True),
         Column('timestamp', DateTime, index=True),
         Column('open', Float),
@@ -44,7 +44,7 @@ def create_tables(engine):
         Column('price_change', Float),
         Column('volume_score', Float),
         Column('rsi', Float),
-        sqlalchemy.schema.UniqueConstraint('symbol', 'market_type', 'timestamp', name='uix_ohlcv')
+        sqlalchemy.schema.UniqueConstraint('symbol_id', 'market_type', 'timestamp', name='uix_ohlcv')
     )
     Table('trades', meta,
         Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
@@ -64,7 +64,7 @@ def create_tables(engine):
     )
     Table('symbols', meta,
         Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
-        Column('symbols', JSON),
+        Column('symbol', String(32), index=True),
         Column('symbol_type', String),
         Column('selected', Boolean),
         Column('base_asset', String(32)),
@@ -96,6 +96,72 @@ def create_tables(engine):
 create_tables(pg_engine)
 
 class DataFetcher:
+
+    def update_symbols_from_binance(self):
+        """Lädt aktuelle Spot- und Futures-Symbole von Binance und upserted sie in die DB (mit allen Details)."""
+        import uuid
+        # Spot
+        try:
+            url = "https://api.binance.com/api/v3/exchangeInfo"
+            resp = requests.get(url, timeout=10)
+            if resp.status_code != 200:
+                self.save_log('ERROR', 'data', 'update_symbols_from_binance', f"Fehler beim Laden der Binance Spot exchangeInfo: {resp.status_code}", str(uuid.uuid4()))
+                spot_count = 0
+            else:
+                data = resp.json()
+                spot_count = 0
+                for s in data['symbols']:
+                    if s['status'] == 'TRADING' and s['isSpotTradingAllowed'] and s['quoteAsset'] == 'USDT':
+                        filters = {f['filterType']: f for f in s.get('filters', [])}
+                        self.upsert_symbol(
+                            s['symbol'], 'spot',
+                            base_asset=s.get('baseAsset'),
+                            quote_asset=s.get('quoteAsset'),
+                            min_qty=float(filters['LOT_SIZE']['minQty']) if 'LOT_SIZE' in filters else None,
+                            step_size=float(filters['LOT_SIZE']['stepSize']) if 'LOT_SIZE' in filters else None,
+                            min_notional=float(filters['MIN_NOTIONAL']['minNotional']) if 'MIN_NOTIONAL' in filters else None,
+                            tick_size=float(filters['PRICE_FILTER']['tickSize']) if 'PRICE_FILTER' in filters else None,
+                            status=s.get('status'),
+                            is_spot_trading_allowed=s.get('isSpotTradingAllowed'),
+                            is_margin_trading_allowed=s.get('isMarginTradingAllowed'),
+                            exchange='BINANCE'
+                        )
+                        spot_count += 1
+            self.save_log('INFO', 'data', 'update_symbols_from_binance', f"Spot-Symbole von Binance aktualisiert: {spot_count}", str(uuid.uuid4()))
+        except Exception as e:
+            self.save_log('ERROR', 'data', 'update_symbols_from_binance', f"Spot-Symbole konnten nicht geladen werden: {e}", str(uuid.uuid4()))
+
+        # Futures
+        try:
+            url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+            resp = requests.get(url, timeout=10)
+            if resp.status_code != 200:
+                self.save_log('ERROR', 'data', 'update_symbols_from_binance', f"Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}", str(uuid.uuid4()))
+                fut_count = 0
+            else:
+                data = resp.json()
+                fut_count = 0
+                for s in data['symbols']:
+                    if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING':
+                        filters = {f['filterType']: f for f in s.get('filters', [])}
+                        self.upsert_symbol(
+                            s['symbol'], 'futures',
+                            base_asset=s.get('baseAsset'),
+                            quote_asset=s.get('quoteAsset'),
+                            min_qty=float(filters['LOT_SIZE']['minQty']) if 'LOT_SIZE' in filters else None,
+                            step_size=float(filters['LOT_SIZE']['stepSize']) if 'LOT_SIZE' in filters else None,
+                            min_notional=float(filters['MIN_NOTIONAL']['notional']) if 'MIN_NOTIONAL' in filters and 'notional' in filters['MIN_NOTIONAL'] else None,
+                            tick_size=float(filters['PRICE_FILTER']['tickSize']) if 'PRICE_FILTER' in filters else None,
+                            status=s.get('status'),
+                            contract_type=s.get('contractType'),
+                            leverage=float(s.get('maintMarginPercent', 0)) if s.get('maintMarginPercent') else None,
+                            exchange='BINANCE'
+                        )
+                        fut_count += 1
+            self.save_log('INFO', 'data', 'update_symbols_from_binance', f"Futures-Symbole von Binance aktualisiert: {fut_count}", str(uuid.uuid4()))
+        except Exception as e:
+            self.save_log('ERROR', 'data', 'update_symbols_from_binance', f"Futures-Symbole konnten nicht geladen werden: {e}", str(uuid.uuid4()))
+
     def get_symbols_table(self) -> Table:
         meta = MetaData()
         table = Table('symbols', meta, autoload_with=pg_engine)
@@ -110,7 +176,7 @@ class DataFetcher:
             query = query.where(table.c.symbol_type == symbol_type)
         rows = session.execute(query).fetchall()
         session.close()
-        return [dict(row) for row in rows]
+        return [dict(row._mapping) for row in rows]
 
     def get_selected_symbols(self, symbol_type: str = None) -> list:
         """Lädt alle als selected markierten Symbole aus der DB."""
@@ -121,7 +187,7 @@ class DataFetcher:
             query = query.where(table.c.symbol_type == symbol_type)
         rows = session.execute(query).fetchall()
         session.close()
-        return [dict(row) for row in rows]
+        return [dict(row._mapping) for row in rows]
 
     def select_symbol(self, symbol: str, symbol_type: str, selected: bool = True) -> None:
         """Setzt das selected-Flag für ein Symbol (UI-Auswahl)."""
@@ -129,21 +195,22 @@ class DataFetcher:
         session = self.get_session()
         session.execute(
             table.update().where(
-                (table.c.symbol_type == symbol_type) & (table.c.symbols.contains([symbol]))
+                (table.c.symbol_type == symbol_type) & (table.c.symbol == symbol)
             ).values(selected=selected, updated_at=datetime.datetime.now(datetime.timezone.utc))
         )
         session.commit()
         session.close()
 
     def upsert_symbol(self, symbol: str, symbol_type: str, **kwargs) -> None:
-        """Fügt ein Symbol ein oder aktualisiert es (z.B. nach Binance-Update)."""
+        """Fügt ein Symbol ein oder aktualisiert es (z.B. nach Binance-Update). Speichert immer alle Spalten, die in kwargs übergeben werden."""
         table = self.get_symbols_table()
         session = self.get_session()
         now = datetime.datetime.now(datetime.timezone.utc)
         row = session.execute(
-            table.select().where((table.c.symbol_type == symbol_type) & (table.c.symbols.contains([symbol])))
+            table.select().where((table.c.symbol_type == symbol_type) & (table.c.symbol == symbol))
         ).fetchone()
-        values = dict(symbols=[symbol], symbol_type=symbol_type, updated_at=now, **kwargs)
+        all_columns = set(table.c.keys())
+        values = {k: v for k, v in dict(symbol=symbol, symbol_type=symbol_type, updated_at=now, **kwargs).items() if k in all_columns}
         if row:
             session.execute(
                 table.update().where(table.c.id == row.id).values(**values)
@@ -294,14 +361,22 @@ class DataFetcher:
             session.close()
 
     def load_ohlcv(self, symbol: str, market_type: str, limit: int = 500) -> pd.DataFrame:
-        """Lädt OHLCV-Daten aus PostgreSQL."""
+        """Lädt OHLCV-Daten aus PostgreSQL für ein Symbol (per Name, nicht ID)."""
         session = self.get_session()
         try:
+            # Hole symbol_id aus symbols-Tabelle
+            symbol_id = None
+            sym_table = self.get_symbols_table()
+            res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol)).fetchone()
+            if res:
+                symbol_id = res.id
+            if not symbol_id:
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
             rows = session.execute(sqlalchemy.text("""
                 SELECT timestamp, open, high, low, close, volume, signal
-                FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type
+                FROM ohlcv WHERE symbol_id=:symbol_id AND market_type=:market_type
                 ORDER BY timestamp DESC LIMIT :limit
-            """), dict(symbol=symbol, market_type=market_type, limit=limit)).fetchall()
+            """), dict(symbol_id=symbol_id, market_type=market_type, limit=limit)).fetchall()
             if not rows:
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
             df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'signal'])
@@ -391,19 +466,27 @@ class DataFetcher:
         return {'assets': assets, 'total_value': total_value, 'prices': prices}
     
     def save_ohlcv(self, df: pd.DataFrame, symbol: str, market_type: str, transaction_id: str) -> None:
-        """Speichert OHLCV-Basisdaten (ohne Signalspalten) in PostgreSQL. transaction_id ist Pflicht."""
+        """Speichert OHLCV-Basisdaten (ohne Signalspalten) in PostgreSQL. transaction_id ist Pflicht. Speichert symbol_id statt symbol."""
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für save_ohlcv")
         if df.empty:
             return
         session = self.get_session()
         try:
+            # Hole symbol_id aus symbols-Tabelle
+            symbol_id = None
+            sym_table = self.get_symbols_table()
+            res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol)).fetchone()
+            if res:
+                symbol_id = res.id
+            if not symbol_id:
+                raise ValueError(f"Symbol {symbol} nicht in symbols-Tabelle gefunden!")
             for _, row in df.iterrows():
                 exists = session.execute(
                     sqlalchemy.text("""
-                        SELECT id FROM ohlcv WHERE symbol=:symbol AND market_type=:market_type AND timestamp=:timestamp
+                        SELECT id FROM ohlcv WHERE symbol_id=:symbol_id AND market_type=:market_type AND timestamp=:timestamp
                     """),
-                    dict(symbol=symbol, market_type=market_type, timestamp=row['timestamp'])
+                    dict(symbol_id=symbol_id, market_type=market_type, timestamp=row['timestamp'])
                 ).first()
                 # Generate UUID for new row if needed
                 if exists:
@@ -415,14 +498,14 @@ class DataFetcher:
                     """), update_dict)
                 else:
                     insert_dict = {k: row.get(k, None) for k in ['open', 'high', 'low', 'close', 'volume']}
-                    insert_dict['symbol'] = symbol
+                    insert_dict['symbol_id'] = symbol_id
                     insert_dict['market_type'] = market_type
                     insert_dict['timestamp'] = row['timestamp']
                     insert_dict['id'] = str(uuid.uuid4())
                     insert_dict['transaction_id'] = transaction_id
                     session.execute(sqlalchemy.text("""
-                        INSERT INTO ohlcv (id, transaction_id, symbol, market_type, timestamp, open, high, low, close, volume)
-                        VALUES (:id, :transaction_id, :symbol, :market_type, :timestamp, :open, :high, :low, :close, :volume)
+                        INSERT INTO ohlcv (id, transaction_id, symbol_id, market_type, timestamp, open, high, low, close, volume)
+                        VALUES (:id, :transaction_id, :symbol_id, :market_type, :timestamp, :open, :high, :low, :close, :volume)
                     """), insert_dict)
             session.commit()
         except Exception as e:
