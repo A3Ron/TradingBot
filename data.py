@@ -295,13 +295,13 @@ class DataFetcher:
     def __init__(self, config: dict = None):
         self.config = config
         self.exchanges = {}
-    def get_spot_symbols(self) -> list:
+    def get_spot_symbols(self, transaction_id: str = None) -> list:
         """Lädt alle handelbaren Spot-Symbole von Binance."""
         try:
             url = "https://api.binance.com/api/v3/exchangeInfo"
             resp = requests.get(url, timeout=10)
             if resp.status_code != 200:
-                self.save_log('ERROR', 'data', 'get_spot_symbols', f"Fehler beim Laden der Binance Spot exchangeInfo: {resp.status_code}")
+                self.save_log('ERROR', 'data', 'get_spot_symbols', f"Fehler beim Laden der Binance Spot exchangeInfo: {resp.status_code}", transaction_id or str(uuid.uuid4()))
                 return []
             data = resp.json()
             return sorted([
@@ -312,7 +312,7 @@ class DataFetcher:
                 and s['quoteAsset'] == 'USDT'
             ])
         except Exception as e:
-            self.save_log('ERROR', 'data', 'get_spot_symbols', f"Spot-Symbole konnten nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'get_spot_symbols', f"Spot-Symbole konnten nicht geladen werden: {e}", transaction_id or str(uuid.uuid4()))
             return []
         
 
@@ -552,12 +552,12 @@ class DataFetcher:
         finally:
             session.close()
 
-    def get_futures_symbols(self) -> list:
+    def get_futures_symbols(self, transaction_id: str = None) -> list:
         try:
             url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
             resp = requests.get(url, timeout=10)
             if resp.status_code != 200:
-                self.save_log('ERROR', 'data', 'get_futures_symbols', f"Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}")
+                self.save_log('ERROR', 'data', 'get_futures_symbols', f"Fehler beim Laden der Binance Futures exchangeInfo: {resp.status_code}", transaction_id or str(uuid.uuid4()))
                 return []
             data = resp.json()
             return sorted([
@@ -568,7 +568,7 @@ class DataFetcher:
                 and s['status'] == 'TRADING'
             ])
         except Exception as e:
-            self.save_log('ERROR', 'data', 'get_futures_symbols', f"Futures-Symbole konnten nicht geladen werden: {e}")
+            self.save_log('ERROR', 'data', 'get_futures_symbols', f"Futures-Symbole konnten nicht geladen werden: {e}", transaction_id or str(uuid.uuid4()))
             return []
 
     def _init_exchange(self, market_type='spot'):

@@ -285,20 +285,14 @@ with st.expander("Trade-Statistiken & Auswertung", expanded=False):
 with st.expander("Binance OHLCV Daten", expanded=False):
     # Stelle sicher, dass die Symbol-Listen im Session-State sind (direkt aus DB, nicht nur aus config)
     if 'spot_symbols' not in st.session_state:
-        st.session_state['spot_symbols'] = [row['symbol'] for row in dfetcher.get_all_symbols('spot')]
+        st.session_state['spot_symbols'] = [row['symbol'] for row in dfetcher.get_selected_symbols('spot')]
     if 'futures_symbols' not in st.session_state:
-        st.session_state['futures_symbols'] = [row['symbol'] for row in dfetcher.get_all_symbols('futures')]
+        st.session_state['futures_symbols'] = [row['symbol'] for row in dfetcher.get_selected_symbols('futures')]
     st.subheader("Letzte OHLCV-Daten pro Symbol und Markt-Typ")
     # Auswahl Spot/Futures
     market_type = st.radio("Markt-Typ wählen", ["spot", "futures"], horizontal=True, key="market_type")
-    # Nur Symbole aus der config.yaml anzeigen
-    config_spot = set(config.get('trading', {}).get('symbols', []))
-    config_futures = set(config.get('trading', {}).get('futures_symbols', []))
-    all_symbols = st.session_state.get(f"{market_type}_symbols", [])
-    if market_type == 'spot':
-        symbols = [s for s in all_symbols if s in config_spot]
-    else:
-        symbols = [s for s in all_symbols if s in config_futures]
+    # Zeige alle in der DB als selected markierten Symbole
+    symbols = st.session_state.get(f"{market_type}_symbols", [])
     if not symbols:
         st.warning(f"Keine {market_type.capitalize()}-Symbole gefunden!")
     else:

@@ -11,15 +11,5 @@ postgres:
   user: postgres
 trading:
   futures: true
-  futures_symbols:
-  - ETHUSDT
-  - BNBUSDT
-  - BTCUSDT
-  - SOLUSDT
   stake_percent: 0.02
-  symbols:
-  - ETHUSDT
-  - BNBUSDT
-  - BTCUSDT
-  - SOLUSDT
   timeframe: 1m
