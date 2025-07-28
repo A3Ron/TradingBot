@@ -251,6 +251,8 @@ class SpotLongStrategy(BaseStrategy):
             return entry
         return None
 
+
+class FuturesShortStrategy(BaseStrategy):
     def evaluate_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         Liefert für die aktuelle Kerze alle Trade- und Signalinfos als Dict zurück.
@@ -338,8 +340,6 @@ class SpotLongStrategy(BaseStrategy):
                 'rsi_threshold': rsi_threshold,
                 'rsi_pct_of_threshold': rsi_pct_of_threshold
             }
-
-class FuturesShortStrategy(BaseStrategy):
     """
     Strategie für Short-Trades auf Futures-Märkten
     """
