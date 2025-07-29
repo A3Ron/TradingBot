@@ -160,7 +160,5 @@ while True:
             list(futures_traders.values())[0].handle_trades(futures_strategy, ohlcv_list=futures_ohlcv_list, transaction_id=transaction_id)
 
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f'Loop fertig, warte {30} Sekunden.', transaction_id)
-        time.sleep(30)
     except Exception as e:
         data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Error: {e}", transaction_id)
-        time.sleep(30)
