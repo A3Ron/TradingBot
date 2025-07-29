@@ -5,7 +5,7 @@ params:
   stop_loss_pct: 0.03 # 3% Stop-Loss
   take_profit_pct: 0.07 # 7% Take-Profit
   trailing_trigger_pct: 0.02 # Trailing Stop wird bei 2% Gewinn aktiviert
-  price_change_pct: 0.01 # 1.0% Preisänderung für Long- oder Short-Signal
+  price_change_pct: 0.015 # 1.5% Preisänderung für Long- oder Short-Signal
   price_change_periods: 5 # 5 Perioden für Preisänderung
   volume_mult: 1.2 # Multiplikator für Volumen
   rsi_long: 52 # RSI-Schwelle für Long-Einstieg

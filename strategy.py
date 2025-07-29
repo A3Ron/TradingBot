@@ -101,7 +101,7 @@ class SpotLongStrategy(BaseStrategy):
     """
     def evaluate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Berechnet für alle Zeilen im DataFrame das Signal und gibt nur relevante Spalten zurück.
+        Berechnet für alle Zeilen im DataFrame das Signal und gibt relevante Spalten inkl. entry, stop_loss, take_profit, volume zurück.
         """
         df = df.copy()
         for col in [self.COL_CLOSE, self.COL_VOLUME]:
@@ -115,8 +115,13 @@ class SpotLongStrategy(BaseStrategy):
             (df[self.COL_VOLUME] > df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1) * self.volume_mult) &
             (df[self.COL_RSI] > self.rsi_long)
         )
+        # Entry, Stop-Loss, Take-Profit, Volume berechnen (nur für Zeilen mit Signal, sonst NaN)
+        df['entry'] = df[self.COL_CLOSE].where(df['signal'], pd.NA)
+        df['stop_loss'] = (df[self.COL_CLOSE] * (1 - self.stop_loss_pct)).where(df['signal'], pd.NA)
+        df['take_profit'] = (df[self.COL_CLOSE] * (1 + self.take_profit_pct)).where(df['signal'], pd.NA)
+        df['volume'] = (df[self.COL_VOLUME] * 1.0).where(df['signal'], pd.NA)
         # Nur relevante Spalten zurückgeben
-        return df[[self.COL_TIMESTAMP, self.COL_CLOSE, self.COL_VOLUME, self.COL_PRICE_CHANGE, self.COL_RSI, 'signal']]
+        return df[[self.COL_TIMESTAMP, self.COL_CLOSE, self.COL_VOLUME, self.COL_PRICE_CHANGE, self.COL_RSI, 'signal', 'entry', 'stop_loss', 'take_profit', 'volume']]
 
     def should_exit_momentum(self, df: pd.DataFrame) -> bool:
         """
@@ -213,7 +218,7 @@ class FuturesShortStrategy(BaseStrategy):
 
     def evaluate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Berechnet für alle Zeilen im DataFrame das Signal und gibt nur relevante Spalten zurück.
+        Berechnet für alle Zeilen im DataFrame das Signal und gibt relevante Spalten inkl. entry, stop_loss, take_profit, volume zurück.
         """
         df = df.copy()
         for col in [self.COL_CLOSE, self.COL_VOLUME]:
@@ -227,5 +232,10 @@ class FuturesShortStrategy(BaseStrategy):
             (df[self.COL_VOLUME] > df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1) * self.volume_mult) &
             (df[self.COL_RSI] < self.rsi_short)
         )
+        # Entry, Stop-Loss, Take-Profit, Volume berechnen (nur für Zeilen mit Signal, sonst NaN)
+        df['entry'] = df[self.COL_CLOSE].where(df['signal'], pd.NA)
+        df['stop_loss'] = (df[self.COL_CLOSE] * (1 + self.stop_loss_pct)).where(df['signal'], pd.NA)
+        df['take_profit'] = (df[self.COL_CLOSE] * (1 - self.take_profit_pct)).where(df['signal'], pd.NA)
+        df['volume'] = (df[self.COL_VOLUME] * 1.0).where(df['signal'], pd.NA)
         # Nur relevante Spalten zurückgeben
-        return df[[self.COL_TIMESTAMP, self.COL_CLOSE, self.COL_VOLUME, self.COL_PRICE_CHANGE, self.COL_RSI, 'signal']]
+        return df[[self.COL_TIMESTAMP, self.COL_CLOSE, self.COL_VOLUME, self.COL_PRICE_CHANGE, self.COL_RSI, 'signal', 'entry', 'stop_loss', 'take_profit', 'volume']]
