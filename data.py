@@ -214,29 +214,6 @@ class DataFetcher:
         session.close()
         return [dict(row._mapping) for row in rows]
 
-    def get_selected_symbols(self, symbol_type: str = None) -> list:
-        """Lädt alle als selected markierten Symbole aus der DB."""
-        table = self.get_symbols_table()
-        session = self.get_session()
-        query = table.select().where(table.c.selected == True)
-        if symbol_type:
-            query = query.where(table.c.symbol_type == symbol_type)
-        rows = session.execute(query).fetchall()
-        session.close()
-        return [dict(row._mapping) for row in rows]
-
-    def select_symbol(self, symbol: str, symbol_type: str, selected: bool = True) -> None:
-        """Setzt das selected-Flag für ein Symbol (UI-Auswahl)."""
-        table = self.get_symbols_table()
-        session = self.get_session()
-        session.execute(
-            table.update().where(
-                (table.c.symbol_type == symbol_type) & (table.c.symbol == symbol)
-            ).values(selected=selected, updated_at=datetime.datetime.now(datetime.timezone.utc))
-        )
-        session.commit()
-        session.close()
-
     def upsert_symbol(self, symbol: str, symbol_type: str, **kwargs) -> None:
         """Fügt ein Symbol ein oder aktualisiert es (z.B. nach Binance-Update). Speichert immer alle Spalten, die in kwargs übergeben werden."""
         table = self.get_symbols_table()
@@ -313,7 +290,7 @@ class DataFetcher:
         return Session()
     
     def save_trade(self, trade_dict: dict, transaction_id: str) -> None:
-        """Speichert einen Trade in der Datenbank. transaction_id ist Pflicht. Generiert UUID falls nicht vorhanden. Speichert symbol_id statt symbol."""
+        """Speichert einen Trade in der Datenbank. transaction_id ist Pflicht. Generiert UUID falls nicht vorhanden. Speichert symbol_id statt symbol. Status und parent_trade_id werden korrekt gesetzt."""
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für save_trade")
         session = self.get_session()
@@ -333,9 +310,24 @@ class DataFetcher:
             # symbol-String aus dict entfernen, falls vorhanden
             if 'symbol' in trade_dict:
                 del trade_dict['symbol']
+
+            # Status und parent_trade_id setzen
+            # Wenn status nicht gesetzt: Standard = 'open'
+            if 'status' not in trade_dict or not trade_dict['status']:
+                trade_dict['status'] = 'open'
+            # parent_trade_id-Logik:
+            # - Wenn status 'open': parent_trade_id = neue UUID (wenn nicht gesetzt)
+            # - Wenn status 'closed': parent_trade_id muss gesetzt sein (sonst Fehler)
+            if trade_dict['status'] == 'open':
+                if 'parent_trade_id' not in trade_dict or not trade_dict['parent_trade_id']:
+                    trade_dict['parent_trade_id'] = str(uuid.uuid4())
+            elif trade_dict['status'] == 'closed':
+                if 'parent_trade_id' not in trade_dict or not trade_dict['parent_trade_id']:
+                    raise ValueError("parent_trade_id muss für geschlossene Trades gesetzt sein!")
+
             session.execute(sqlalchemy.text("""
-                INSERT INTO trades (id, transaction_id, symbol_id, market_type, timestamp, side, qty, price, fee, profit, order_id, extra)
-                VALUES (:id, :transaction_id, :symbol_id, :market_type, :timestamp, :side, :qty, :price, :fee, :profit, :order_id, :extra)
+                INSERT INTO trades (id, transaction_id, parent_trade_id, symbol_id, market_type, timestamp, side, status, qty, price, fee, profit, order_id, extra)
+                VALUES (:id, :transaction_id, :parent_trade_id, :symbol_id, :market_type, :timestamp, :side, :status, :qty, :price, :fee, :profit, :order_id, :extra)
             """), trade_dict)
             session.commit()
         except Exception as e:

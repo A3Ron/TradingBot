@@ -101,30 +101,22 @@ class SpotLongStrategy(BaseStrategy):
     """
     def evaluate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Berechnet für alle Zeilen im DataFrame die Analytics- und Signalspalten (Long-Logik).
-        Gibt ein DataFrame mit allen Spalten zurück.
+        Berechnet für alle Zeilen im DataFrame das Signal und gibt nur relevante Spalten zurück.
         """
         df = df.copy()
         for col in [self.COL_CLOSE, self.COL_VOLUME]:
             if col not in df.columns:
                 raise ValueError(f"DataFrame muss Spalte '{col}' enthalten!")
         df[self.COL_PRICE_CHANGE] = df[self.COL_CLOSE].pct_change(periods=self.price_change_periods)
-        df[self.COL_VOL_MEAN] = df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
         df = self.ensure_rsi_column(df)
-        df[self.COL_VOLUME_SCORE] = df[self.COL_VOLUME] / df[self.COL_VOL_MEAN].replace(0, float('nan'))
-        df['price_change_threshold'] = self.price_change_pct
-        df['volume_score_threshold'] = self.volume_mult
-        df['rsi_threshold'] = self.rsi_long
-        df['price_change_pct_of_threshold'] = df[self.COL_PRICE_CHANGE] / self.price_change_pct
-        df['volume_score_pct_of_threshold'] = df[self.COL_VOLUME_SCORE] / self.volume_mult
-        df['rsi_pct_of_threshold'] = df[self.COL_RSI] / self.rsi_long
         # Signal-Bedingung für jede Zeile prüfen (Long-Logik)
         df['signal'] = (
             (df[self.COL_PRICE_CHANGE] > self.price_change_pct) &
-            (df[self.COL_VOLUME] > self.volume_mult * df[self.COL_VOL_MEAN]) &
+            (df[self.COL_VOLUME] > df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1) * self.volume_mult) &
             (df[self.COL_RSI] > self.rsi_long)
         )
-        return df
+        # Nur relevante Spalten zurückgeben
+        return df[[self.COL_TIMESTAMP, self.COL_CLOSE, self.COL_VOLUME, self.COL_PRICE_CHANGE, self.COL_RSI, 'signal']]
 
     def should_exit_momentum(self, df: pd.DataFrame) -> bool:
         """
@@ -221,27 +213,19 @@ class FuturesShortStrategy(BaseStrategy):
 
     def evaluate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Berechnet für alle Zeilen im DataFrame die Analytics- und Signalspalten.
-        Gibt ein DataFrame mit allen Spalten zurück.
+        Berechnet für alle Zeilen im DataFrame das Signal und gibt nur relevante Spalten zurück.
         """
         df = df.copy()
         for col in [self.COL_CLOSE, self.COL_VOLUME]:
             if col not in df.columns:
                 raise ValueError(f"DataFrame muss Spalte '{col}' enthalten!")
         df[self.COL_PRICE_CHANGE] = df[self.COL_CLOSE].pct_change(periods=self.price_change_periods)
-        df[self.COL_VOL_MEAN] = df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
         df = self.ensure_rsi_column(df)
-        df[self.COL_VOLUME_SCORE] = df[self.COL_VOLUME] / df[self.COL_VOL_MEAN].replace(0, float('nan'))
-        df['price_change_threshold'] = self.price_change_pct
-        df['volume_score_threshold'] = self.volume_mult
-        df['rsi_threshold'] = self.rsi_short
-        df['price_change_pct_of_threshold'] = df[self.COL_PRICE_CHANGE] / self.price_change_pct
-        df['volume_score_pct_of_threshold'] = df[self.COL_VOLUME_SCORE] / self.volume_mult
-        df['rsi_pct_of_threshold'] = df[self.COL_RSI] / self.rsi_short
-        # Signal-Bedingung für jede Zeile prüfen
+        # Signal-Bedingung für jede Zeile prüfen (Short-Logik)
         df['signal'] = (
             (df[self.COL_PRICE_CHANGE] < -self.price_change_pct) &
-            (df[self.COL_VOLUME] > self.volume_mult * df[self.COL_VOL_MEAN]) &
+            (df[self.COL_VOLUME] > df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1) * self.volume_mult) &
             (df[self.COL_RSI] < self.rsi_short)
         )
-        return df
+        # Nur relevante Spalten zurückgeben
+        return df[[self.COL_TIMESTAMP, self.COL_CLOSE, self.COL_VOLUME, self.COL_PRICE_CHANGE, self.COL_RSI, 'signal']]

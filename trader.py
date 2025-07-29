@@ -4,6 +4,7 @@ import pandas as pd
 import traceback
 from typing import Optional, Dict, Any
 from data import DataFetcher
+import uuid
 
 # Magic constants
 SPOT = 'spot'
@@ -85,11 +86,13 @@ class BaseTrader:
             self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_new_trade_candidate', f"Fehler beim Ausführen des {market_type.capitalize()}-{side.capitalize()}-Trades für {symbol}: {e}", transaction_id)
 
     def close_trade(self, market_type: str, side: str, qty: float, price: float, exit_type: str, transaction_id: str) -> None:
-        """
-        Schließt einen Trade und loggt das Ergebnis.
-        """
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für close_trade")
+        parent_trade_id = None
+        if hasattr(self, 'open_trade') and self.open_trade and 'signal' in self.open_trade and hasattr(self.open_trade['signal'], 'parent_trade_id'):
+            parent_trade_id = self.open_trade['signal'].parent_trade_id
+        if not parent_trade_id:
+            parent_trade_id = str(uuid.uuid4())
         trade_dict = {
             'symbol': self.symbol,
             'market_type': market_type,
@@ -101,7 +104,8 @@ class BaseTrader:
             'profit': 0.0,
             'order_id': '',
             'extra': 'closed',
-            'outcome': 'closed',
+            'status': 'closed',
+            'parent_trade_id': parent_trade_id,
             'exit_type': exit_type
         }
         self.data.save_trade(trade_dict, transaction_id)
@@ -149,7 +153,9 @@ class BaseTrader:
             return signal.volume if hasattr(signal, 'volume') and signal.volume is not None else 0.0
 
 class SpotLongTrader(BaseTrader):
+    """ Spot-Trader für Long-Positionen."""
     def __init__(self, config, symbol, data_fetcher=None, exchange=None):
+        """Initialisiert den SpotLongTrader mit Konfiguration, Symbol und optionalem Exchange."""
         super().__init__(config, symbol, data_fetcher, exchange)
         if self.exchange is None:
             api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
@@ -168,50 +174,67 @@ class SpotLongTrader(BaseTrader):
                 self.data.save_log(LOG_ERROR, 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
                 raise
 
-    def handle_trades(self, strategy, transaction_id):
+    def handle_trades(self, strategy, ohlcv_list, transaction_id):
         """
-        Handles the trading loop: prüft das gespeicherte Signal der neuesten Kerze und handelt entsprechend (Spot Long).
+        Verarbeitet eine Liste von OHLCV-DataFrames (je Symbol), ruft evaluate_signals auf, loggt ausführlich die Entscheidungsgrundlage und handelt nur das beste Symbol, sofern kein Trade offen ist.
+        Pro SpotTrader ist nur ein Trade gleichzeitig offen.
         """
         if not transaction_id:
+            self.data.save_log(LOG_ERROR, 'trader', 'handle_trades', "transaction_id ist Pflicht für handle_trades", transaction_id)
             raise ValueError("transaction_id ist Pflicht für handle_trades")
-        self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[SPOT] Prüfe Symbol: {self.symbol}", transaction_id)
-        try:
-            df = self.data.load_ohlcv(self.symbol, SPOT, limit=1)
-        except Exception as e:
-            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_trades', f"[SPOT] Fehler beim Laden der OHLCV-Daten für {self.symbol}: {e}", transaction_id)
-            df = None
-
         if self.open_trade is not None:
+            self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_trades', f"[SPOT] Es ist bereits ein Trade offen für {self.open_trade['symbol']}, überwache diesen.", transaction_id)
             self.handle_open_trade(strategy, transaction_id, SPOT, LONG)
-        else:
-            if df is not None and not df.empty:
-                last_row = df.iloc[-1]
-                if last_row.get('signal'):
-                    # Baue Signalobjekt für handle_new_trade_candidate
-                    candidate = {
-                        'symbol': self.symbol,
-                        'signal': last_row.to_dict(),
-                        'vol_score': last_row.get('volume_score', 0) or 0,
-                        'df': df
-                    }
-                    self.handle_new_trade_candidate(candidate, strategy, transaction_id, SPOT, LONG, self.execute_trade)
-                else:
-                    self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[SPOT] Kein Signal für {self.symbol} in aktueller Kerze.", transaction_id)
+            return
+        best_score = None
+        best_candidate = None
+        log_lines = []
+        for df in ohlcv_list:
+            if df is None or df.empty or 'symbol' not in df.columns:
+                continue
+            symbol = df['symbol'].iloc[0]
+            signals_df = strategy.evaluate_signals(df)
+            last_row = signals_df.iloc[-1]
+            signal = last_row.get('signal', False)
+            # Logge Entscheidungsgrundlage für jedes Symbol
+            log_msg = f"[SPOT] Symbol: {symbol} | Signal: {signal} | Close: {last_row.get('close')} | PriceChange: {last_row.get('price_change')} | Volume: {last_row.get('volume')} | RSI: {last_row.get('rsi')}"
+            if signal:
+                log_msg += " | *** SIGNAL AKTIV ***"
             else:
-                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[SPOT] Keine Daten für {self.symbol}.", transaction_id)
+                log_msg += " | Kein Signal (Bedingungen nicht erfüllt)"
+            log_lines.append(log_msg)
+            # Score für Auswahl des besten Trades (z.B. price_change)
+            if signal:
+                score = abs(last_row.get('price_change', 0))
+                candidate = {
+                    'symbol': symbol,
+                    'signal': last_row.to_dict(),
+                    'vol_score': last_row.get('volume_score', 0) or 0,
+                    'df': df
+                }
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_candidate = candidate
+        # Logge alle Entscheidungsgrundlagen gesammelt
+        for line in log_lines:
+            self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_trades', line, transaction_id)
+        # Führe nur den besten Trade aus, falls einer gefunden wurde
+        if best_candidate:
+            self.handle_new_trade_candidate(best_candidate, strategy, transaction_id, SPOT, LONG, self.execute_trade)
+        else:
+            self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_trades', f"[SPOT] Kein Symbol mit aktivem Signal gefunden.", transaction_id)
     
     def execute_trade(self, signal, transaction_id):
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für execute_trade")
-        # Determine base volume by risk percentage logic
         self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Starte execute_trade für {self.symbol} (LONG). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}", transaction_id)
         volume = self.get_trade_volume(signal)
         self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Berechnetes Volumen für {self.symbol}: {volume}", transaction_id)
         msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
+        parent_trade_id = str(uuid.uuid4())
         if self.mode == 'testnet':
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
             self.send_telegram(f"[TESTNET] {msg}")
-            # Testnet-Trade als Dummy in DB speichern
             trade_dict = {
                 'symbol': self.symbol,
                 'market_type': 'testnet',
@@ -222,10 +245,13 @@ class SpotLongTrader(BaseTrader):
                 'fee': 0.0,
                 'profit': 0.0,
                 'order_id': 'testnet',
-                'extra': '[TESTNET]'
+                'extra': '[TESTNET]',
+                'status': 'open',
+                'parent_trade_id': parent_trade_id
             }
             self.data.save_trade(trade_dict, transaction_id)
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_dict}", transaction_id)
+            signal.parent_trade_id = parent_trade_id
             return True
         try:
             self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Sende Market-BUY Order für {self.symbol}...", transaction_id)
@@ -241,7 +267,6 @@ class SpotLongTrader(BaseTrader):
             )
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Order ausgeführt: {order}", transaction_id)
             self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
-            # Trade in DB speichern
             trade_dict = {
                 'symbol': self.symbol,
                 'market_type': 'spot',
@@ -252,10 +277,13 @@ class SpotLongTrader(BaseTrader):
                 'fee': order.get('fee', 0.0) if isinstance(order, dict) else 0.0,
                 'profit': 0.0,
                 'order_id': str(order.get('id', '')) if isinstance(order, dict) else '',
-                'extra': str(order)
+                'extra': str(order),
+                'status': 'open',
+                'parent_trade_id': parent_trade_id
             }
             self.data.save_trade(trade_dict, transaction_id)
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_dict}", transaction_id)
+            signal.parent_trade_id = parent_trade_id
             return order
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'execute_trade', f"Trade fehlgeschlagen: {e}", transaction_id)
@@ -319,7 +347,9 @@ class SpotLongTrader(BaseTrader):
         return None
 
 class FuturesShortTrader(BaseTrader):
+    """ Futures-Trader für Short-Positionen."""
     def __init__(self, config, symbol, data_fetcher=None, exchange=None):
+        """Initialisiert den FuturesShortTrader mit Konfiguration, Symbol und optionalem Exchange."""
         super().__init__(config, symbol, data_fetcher, exchange)
         if self.exchange is None:
             api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
@@ -338,36 +368,54 @@ class FuturesShortTrader(BaseTrader):
                 self.data.save_log(LOG_ERROR, 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
                 raise
 
-    def handle_trades(self, strategy, transaction_id):
+    def handle_trades(self, strategy, ohlcv_list, transaction_id):
         """
-        Handles the trading loop: prüft das gespeicherte Signal der neuesten Kerze und handelt entsprechend (Futures Short).
+        Verarbeitet eine Liste von OHLCV-DataFrames (je Symbol), ruft evaluate_signals auf, loggt ausführlich die Entscheidungsgrundlage und handelt nur das beste Symbol, sofern kein Trade offen ist.
+        Pro FuturesTrader ist nur ein Trade gleichzeitig offen.
         """
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für handle_trades")
-        self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[FUTURES] Prüfe Symbol: {self.symbol}", transaction_id)
-        try:
-            df = self.data.load_ohlcv(self.symbol, FUTURES, limit=1)
-        except Exception as e:
-            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_trades', f"[FUTURES] Fehler beim Laden der OHLCV-Daten für {self.symbol}: {e}", transaction_id)
-            df = None
-
         if self.open_trade is not None:
+            self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_trades', f"[FUTURES] Es ist bereits ein Trade offen für {self.open_trade['symbol']}, überwache diesen.", transaction_id)
             self.handle_open_trade(strategy, transaction_id, FUTURES, SHORT)
-        else:
-            if df is not None and not df.empty:
-                last_row = df.iloc[-1]
-                if last_row.get('signal'):
-                    candidate = {
-                        'symbol': self.symbol,
-                        'signal': last_row.to_dict(),
-                        'vol_score': last_row.get('volume_score', 0) or 0,
-                        'df': df
-                    }
-                    self.handle_new_trade_candidate(candidate, strategy, transaction_id, FUTURES, SHORT, self.execute_trade)
-                else:
-                    self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[FUTURES] Kein Signal für {self.symbol} in aktueller Kerze.", transaction_id)
+            return
+        best_score = None
+        best_candidate = None
+        log_lines = []
+        for df in ohlcv_list:
+            if df is None or df.empty or 'symbol' not in df.columns:
+                continue
+            symbol = df['symbol'].iloc[0]
+            signals_df = strategy.evaluate_signals(df)
+            last_row = signals_df.iloc[-1]
+            signal = last_row.get('signal', False)
+            # Logge Entscheidungsgrundlage für jedes Symbol
+            log_msg = f"[FUTURES] Symbol: {symbol} | Signal: {signal} | Close: {last_row.get('close')} | PriceChange: {last_row.get('price_change')} | Volume: {last_row.get('volume')} | RSI: {last_row.get('rsi')}"
+            if signal:
+                log_msg += " | *** SIGNAL AKTIV ***"
             else:
-                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"[FUTURES] Keine Daten für {self.symbol}.", transaction_id)
+                log_msg += " | Kein Signal (Bedingungen nicht erfüllt)"
+            log_lines.append(log_msg)
+            # Score für Auswahl des besten Trades (z.B. price_change)
+            if signal:
+                score = abs(last_row.get('price_change', 0))
+                candidate = {
+                    'symbol': symbol,
+                    'signal': last_row.to_dict(),
+                    'vol_score': last_row.get('volume_score', 0) or 0,
+                    'df': df
+                }
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_candidate = candidate
+        # Logge alle Entscheidungsgrundlagen gesammelt
+        for line in log_lines:
+            self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_trades', line, transaction_id)
+        # Führe nur den besten Trade aus, falls einer gefunden wurde
+        if best_candidate:
+            self.handle_new_trade_candidate(best_candidate, strategy, transaction_id, FUTURES, SHORT, self.execute_trade)
+        else:
+            self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_trades', f"[FUTURES] Kein Symbol mit aktivem Signal gefunden.", transaction_id)
 
     def execute_trade(self, signal, transaction_id):
         if not transaction_id:
@@ -382,10 +430,10 @@ class FuturesShortTrader(BaseTrader):
             volume = signal.volume
         self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Berechnetes Volumen für {self.symbol}: {volume}", transaction_id)
         msg = f"SHORT {self.symbol} @ {signal.entry} Vol: {volume}"
+        parent_trade_id = str(uuid.uuid4())
         if self.mode == 'testnet':
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
             self.send_telegram(f"[TESTNET] {msg}")
-            # Testnet-Trade als Dummy in DB speichern
             trade_dict = {
                 'symbol': self.symbol,
                 'market_type': 'testnet',
@@ -396,10 +444,13 @@ class FuturesShortTrader(BaseTrader):
                 'fee': 0.0,
                 'profit': 0.0,
                 'order_id': 'testnet',
-                'extra': '[TESTNET]'
+                'extra': '[TESTNET]',
+                'status': 'open',
+                'parent_trade_id': parent_trade_id
             }
             self.data.save_trade(trade_dict, transaction_id)
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_dict}", transaction_id)
+            signal.parent_trade_id = parent_trade_id
             return True
         try:
             self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Sende Market-SELL Order für {self.symbol}...", transaction_id)
@@ -410,9 +461,7 @@ class FuturesShortTrader(BaseTrader):
             )
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Short-Order ausgeführt: {order}", transaction_id)
             self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
-            # Update signal volume to actual executed amount
             signal.volume = order.get('amount', volume)
-            # Trade in DB speichern
             trade_dict = {
                 'symbol': self.symbol,
                 'market_type': 'futures',
@@ -423,10 +472,13 @@ class FuturesShortTrader(BaseTrader):
                 'fee': order.get('fee', 0.0) if isinstance(order, dict) else 0.0,
                 'profit': 0.0,
                 'order_id': str(order.get('id', '')) if isinstance(order, dict) else '',
-                'extra': str(order)
+                'extra': str(order),
+                'status': 'open',
+                'parent_trade_id': parent_trade_id
             }
             self.data.save_trade(trade_dict, transaction_id)
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_dict}", transaction_id)
+            signal.parent_trade_id = parent_trade_id
             return order
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'execute_trade', f"Short-Trade fehlgeschlagen: {e}", transaction_id)
