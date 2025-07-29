@@ -123,16 +123,15 @@ data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Spot-Trader Instanzen: {list(spot_
 futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_fetcher) for symbol in futures_symbols}
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Trader Instanzen: {list(futures_traders.keys())}", str(uuid.uuid4()))
 
-# Sende Startup-Nachricht mit wichtigsten Infos (nur einmal)
+# Sende Startnachricht mit wichtigsten Infos (nur einmal)
 startup_msg = format_startup_message(config)
-if not spot_traders:
-    data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Startup-Message wird gesendet.', str(uuid.uuid4()))
-    spot_traders.send_telegram(startup_msg)
-elif not futures_traders:
-    data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Startup-Message wird gesendet.', str(uuid.uuid4()))
-    futures_traders.send_telegram(startup_msg)
-else:
-    data_fetcher.save_log(LOG_WARNING, MAIN, INIT, "Keine Trader-Instanzen vorhanden, Startup-Nachricht nicht gesendet.", str(uuid.uuid4()))
+data_fetcher.save_log('INFO', 'main', 'init', 'Startup-Message wird gesendet.', str(uuid.uuid4()))
+if spot_traders:
+    # Sende über den ersten Spot-Trader, falls vorhanden
+    list(spot_traders.values())[0].send_telegram(startup_msg)
+elif futures_traders:
+    # Sonst über den ersten Futures-Trader
+    list(futures_traders.values())[0].send_telegram(startup_msg)
 
 # --- Hauptloop ---
 while True:
