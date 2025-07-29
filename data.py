@@ -440,7 +440,6 @@ class DataFetcher:
                         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                     except Exception as e:
                         self.save_log(ERROR, DATA, 'fetch_ohlcv', f"Binance fetch_ohlcv failed: {e}\n{traceback.format_exc()}", transaction_id)
-                        self.save_log(DEBUG, DATA, traceback.format_exc(), transaction_id)
                         continue
                 if df is not None and not df.empty:
                     df['symbol'] = symbol
