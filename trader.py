@@ -83,7 +83,7 @@ class BaseTrader:
             result = execute_trade_method(signal_obj, transaction_id)
             self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[MAIN] {market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol}: {result}", transaction_id)
             if result:
-                self.send_telegram(f"{market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol} Entry: {signal.get('entry')} SL: {signal.get('stop_loss')} TP: {signal.get('take_profit')} Vol: {signal.get('volume')}")
+                self.send_telegram(f"{market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol} Entry: {signal.get('entry')} SL: {signal.get('stop_loss')} TP: {signal.get('take_profit')} Vol: {signal.get('volume')}", transaction_id)
                 self.open_trade = candidate
             else:
                 self.data.save_log(LOG_WARN, self.__class__.__name__, 'handle_new_trade_candidate', f"[{market_type.upper()}] Trade für {symbol} wurde nicht ausgeführt (execute_trade lieferte None).", transaction_id)
@@ -139,7 +139,7 @@ class BaseTrader:
         try:
             requests.post(url, data=data)
         except Exception as e:
-            self.data.save_log(LOG_WARN, 'trader', f"Telegram error: {e}\n{traceback.format_exc()}")
+            self.data.save_log(LOG_WARN, 'trader', f"Telegram error: {e}\n{traceback.format_exc()}", str(uuid.uuid4()))
 
     def get_trade_volume(self, signal: Any) -> float:
         """
@@ -177,7 +177,7 @@ class SpotLongTrader(BaseTrader):
             api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
             api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')
             if not api_key or not api_secret:
-                self.data.save_log(LOG_ERROR, 'trader', 'Binance API-Key oder Secret fehlt!')
+                self.data.save_log(LOG_ERROR, 'trader', 'Binance API-Key oder Secret fehlt!', str(uuid.uuid4()))
                 raise ValueError('Binance API-Key oder Secret fehlt!')
             try:
                 self.exchange = ccxt.binance({
@@ -187,7 +187,7 @@ class SpotLongTrader(BaseTrader):
                     'options': {'defaultType': 'spot'}
                 })
             except Exception as e:
-                self.data.save_log(LOG_ERROR, 'trader', f'Fehler bei Exchange-Initialisierung: {e}')
+                self.data.save_log(LOG_ERROR, 'trader', f'Fehler bei Exchange-Initialisierung: {e}', str(uuid.uuid4()))
                 raise
 
     def handle_trades(self, strategy, ohlcv_list, transaction_id):
