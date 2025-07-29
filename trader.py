@@ -55,7 +55,6 @@ class BaseTrader:
         if trade:
             # OHLCV-Daten gezielt nachladen (fetch_ohlcv_single)
             try:
-                # Fix: timeframe aus 'trading' statt 'data' lesen
                 timeframe = self.config['trading']['timeframe']
                 df = self.data.fetch_ohlcv_single(self.symbol, market_type, timeframe, transaction_id, limit=50)
                 if df is not None:
@@ -71,8 +70,14 @@ class BaseTrader:
                 for k, v in signal.items():
                     setattr(signal_obj, k, v)
                 trade['signal'] = signal_obj
+            # Validierung: df und signal müssen vorhanden sein
+            if 'df' not in trade or trade['df'] is None:
+                self.data.save_log(LOG_WARN, 'trader', 'load_last_open_trade', f"Warnung: Geladener Trade hat kein df! {trade}", transaction_id)
+            if 'signal' not in trade or trade['signal'] is None:
+                self.data.save_log(LOG_WARN, 'trader', 'load_last_open_trade', f"Warnung: Geladener Trade hat kein signal! {trade}", transaction_id)
             self.open_trade = trade
             self.data.save_log(LOG_INFO, 'trader', 'load_last_open_trade', f"Offener Trade geladen: {trade}", transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'load_last_open_trade', f"DEBUG: self.open_trade nach Laden: {self.open_trade}", transaction_id)
         else:
             self.open_trade = None
             self.data.save_log(LOG_INFO, 'trader', 'load_last_open_trade', f"Kein offener Trade für {self.symbol} ({side}, {market_type}) gefunden.", str(uuid.uuid4()))
@@ -300,6 +305,7 @@ class SpotLongTrader(BaseTrader):
             raise ValueError("transaction_id ist Pflicht für handle_trades")
         if self.open_trade is not None:
             self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_trades', f"[SPOT] Es ist bereits ein Trade offen für {self.open_trade['symbol']}, überwache diesen.", transaction_id)
+            self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_trades', f"DEBUG: self.open_trade in handle_trades: {self.open_trade}", transaction_id)
             self.handle_open_trade(strategy, transaction_id, SPOT, LONG)
             return
         best_score = None
