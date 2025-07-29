@@ -22,8 +22,8 @@ MAIN_LOOP = "main_loop"
 # --- Funktionen ---
 def format_startup_message(config):
     # Symbole aus der Datenbank lesen (selected)
-    spot_symbols = [row['symbol'] for row in data_fetcher.get_selected_symbols('spot')]
-    futures_symbols = [row['symbol'] for row in data_fetcher.get_selected_symbols('futures')]
+    spot_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type='spot')]
+    futures_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type='futures')]
     spot_symbols_str = ', '.join(spot_symbols) if spot_symbols else '-'
     futures_symbols_str = ', '.join(futures_symbols) if futures_symbols else '-'
     # Initialisiertes Symbol: erstes Spot-Symbol, sonst erstes Futures-Symbol, sonst leer
