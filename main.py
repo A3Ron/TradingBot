@@ -86,7 +86,7 @@ try:
         config = yaml.safe_load(f)
     config = resolve_env_vars(config)
     timeframe = config['trading']['timeframe']
-    data_fetcher = DataFetcher(config)
+    data_fetcher = DataFetcher()
     data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Config und DataFetcher erfolgreich geladen.', str(uuid.uuid4()))
 except Exception as e:
     data_fetcher.save_log(LOG_ERROR, MAIN, INIT, f'Fehler beim Laden der Config/DataFetcher: {e}', str(uuid.uuid4()))

@@ -60,7 +60,7 @@ class BaseStrategy:
         self.momentum_exit_rsi: int = int(self.params.get('momentum_exit_rsi', 50))
         self.rsi_period: int = int(self.params.get('rsi_period', 14))
         self.price_change_periods: int = int(self.params.get('price_change_periods', 12))
-        self.data = DataFetcher(self.config)
+        self.data = DataFetcher()
 
 
     def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:

@@ -37,7 +37,7 @@ class BaseTrader:
         self.mode = config['execution']['mode']
         self.telegram_token = os.environ.get('TELEGRAM_TOKEN', '')
         self.telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
-        self.data = data_fetcher if data_fetcher is not None else DataFetcher(self.config)
+        self.data = data_fetcher if data_fetcher is not None else DataFetcher()
         self.exchange = exchange if exchange is not None else None
         self.open_trade: Optional[Dict[str, Any]] = None
         self.last_candle_time: Optional[pd.Timestamp] = None
