@@ -391,9 +391,17 @@ class DataFetcher:
                 if 'parent_trade_id' not in trade_dict or not trade_dict['parent_trade_id']:
                     raise ValueError("parent_trade_id muss für geschlossene Trades gesetzt sein!")
 
-            # --- Serialisierung von fee und extra, falls dict ---
-            if 'fee' in trade_dict and isinstance(trade_dict['fee'], dict):
-                trade_dict['fee'] = json.dumps(trade_dict['fee'])
+            # --- fee MUSS float sein (DB-Spalte ist Float); falls dict, extrahiere 'cost' ---
+            if 'fee' in trade_dict:
+                fee_val = trade_dict['fee']
+                if isinstance(fee_val, dict):
+                    trade_dict['fee'] = float(fee_val.get('cost', 0.0))
+                elif not isinstance(fee_val, (float, int)):
+                    # Versuche zu konvertieren, sonst setze auf 0.0
+                    try:
+                        trade_dict['fee'] = float(fee_val)
+                    except Exception:
+                        trade_dict['fee'] = 0.0
             if 'extra' in trade_dict and isinstance(trade_dict['extra'], dict):
                 trade_dict['extra'] = json.dumps(trade_dict['extra'])
 
