@@ -124,24 +124,12 @@ futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Trader Instanzen: {list(futures_traders.keys())}", str(uuid.uuid4()))
 
 # Sende Startup-Nachricht mit wichtigsten Infos (nur einmal)
-
-# Format and send startup message via Telegram (if possible)
 startup_msg = format_startup_message(config)
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Startup-Message wird gesendet.', str(uuid.uuid4()))
-try:
-    # Try to send via first available SpotLongTrader, else FuturesShortTrader
-    trader_for_telegram = None
-    if spot_traders:
-        trader_for_telegram = list(spot_traders.values())[0]
-    elif futures_traders:
-        trader_for_telegram = list(futures_traders.values())[0]
-    if trader_for_telegram:
-        trader_for_telegram.send_telegram(startup_msg)
-        data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Startup-Message via Telegram gesendet.', str(uuid.uuid4()))
-    else:
-        data_fetcher.save_log(LOG_WARNING, MAIN, INIT, 'Kein Trader für Telegram-Versand der Startup-Message gefunden.', str(uuid.uuid4()))
-except Exception as e:
-    data_fetcher.save_log(LOG_ERROR, MAIN, INIT, f'Fehler beim Senden der Startup-Message via Telegram: {e}', str(uuid.uuid4()))
+if not spot_traders:
+    spot_traders.send_telegram(startup_msg)
+elif not futures_traders:
+    futures_traders.send_telegram(startup_msg)
 
 # --- Hauptloop ---
 while True:
