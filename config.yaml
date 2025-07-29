@@ -11,5 +11,4 @@ postgres:
   user: postgres
 trading:
   futures: true
-  stake_percent: 0.02
   timeframe: 1m

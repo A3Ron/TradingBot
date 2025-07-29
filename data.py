@@ -131,6 +131,71 @@ class DataFetcher:
         """Initialisiert den DataFetcher und lädt die Konfiguration."""
         self.exchanges = {}
 
+    def get_last_open_trade(self, symbol: str, side: str, market_type: str) -> dict:
+        """
+        Lädt den letzten offenen Trade für ein Symbol, eine Seite (long/short) und einen Markt (spot/futures) aus der DB.
+        Gibt ein dict im TradingBot-Format zurück oder None, falls kein offener Trade existiert.
+        """
+        session = self.get_session()
+        try:
+            # Hole symbol_id
+            sym_table = self.get_symbols_table()
+            res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol)).fetchone()
+            if not res:
+                return None
+            symbol_id = res.id
+            # Query letzten offenen Trade
+            trades_table = Table('trades', MetaData(), autoload_with=pg_engine)
+            query = (
+                trades_table.select()
+                .where(
+                    trades_table.c.symbol_id == symbol_id,
+                    trades_table.c.side == side,
+                    trades_table.c.market_type == market_type,
+                    trades_table.c.status == 'open'
+                )
+                .order_by(trades_table.c.timestamp.desc())
+            )
+            row = session.execute(query).fetchone()
+            if not row:
+                return None
+            # Signal-Parameter aus extra-Feld extrahieren (falls als JSON gespeichert)
+            import json
+            extra = row.extra
+            signal_params = {}
+            if extra:
+                try:
+                    extra_dict = json.loads(extra) if isinstance(extra, str) else extra
+                    for key in ['entry', 'stop_loss', 'take_profit', 'volume']:
+                        if key in extra_dict:
+                            signal_params[key] = extra_dict[key]
+                except Exception:
+                    pass
+            # Fallbacks
+            if 'entry' not in signal_params and row.price is not None:
+                signal_params['entry'] = row.price
+            if 'volume' not in signal_params and row.qty is not None:
+                signal_params['volume'] = row.qty
+            # Trade-Objekt im Bot-Format
+            trade_dict = {
+                'symbol': symbol,
+                'signal': signal_params,
+                'vol_score': None,  # Nicht aus DB rekonstruierbar
+                'df': None,         # Muss im Bot nachgeladen werden
+                'parent_trade_id': str(row.parent_trade_id) if row.parent_trade_id else None,
+                'trade_id': str(row.id) if row.id else None,
+                'timestamp': row.timestamp,
+                'side': row.side,
+                'market_type': row.market_type,
+                'status': row.status
+            }
+            return trade_dict
+        except Exception as e:
+            self.save_log(ERROR, DATA, 'get_last_open_trade', f"Fehler beim Laden des offenen Trades: {e}", str(uuid.uuid4()))
+            return None
+        finally:
+            session.close()
+
     def update_symbols_from_binance(self):
         """Lädt aktuelle Spot- und Futures-Symbole von Binance und upserted sie in die DB (mit allen Details)."""
         import uuid
@@ -387,3 +452,17 @@ class DataFetcher:
                 self.save_log(ERROR, DATA, 'fetch_ohlcv', f"Fehler beim Laden von OHLCV für {symbol} ({market_type}): {e}", transaction_id)
                 continue
         return results
+    
+    def fetch_ohlcv_single(self, symbol: str, market_type: str, timeframe: str, transaction_id: str, limit: int = 20) -> pd.DataFrame:
+        """
+        Lädt OHLCV-Daten für ein einzelnes Symbol und gibt ein DataFrame zurück.
+        transaction_id ist Pflicht.
+        """
+        if not transaction_id:
+            raise ValueError("transaction_id ist Pflicht für fetch_ohlcv_single")
+        if not timeframe:
+            raise ValueError("timeframe ist Pflicht für fetch_ohlcv_single")
+        dfs = self.fetch_ohlcv([symbol], market_type, timeframe, transaction_id, limit=limit)
+        if dfs and len(dfs) > 0:
+            return dfs[0]
+        return None

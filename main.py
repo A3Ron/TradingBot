@@ -34,8 +34,8 @@ def format_startup_message(config):
             strategy_cfg = yaml.safe_load(f)
     except Exception:
         pass
-    risk_percent = config['trading'].get('risk_percent', strategy_cfg.get('risk_percent', ''))
-    stake_percent = config['trading'].get('stake_percent', '')
+    risk_percent = strategy_cfg.get('risk_percent', '')
+    stake_percent = strategy_cfg.get('stake_percent', '')
     futures = config['trading'].get('futures', '')
     params = strategy_cfg.get('params', {})
     msg = (
@@ -111,17 +111,31 @@ data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Alle Spot-Symbole: {spot_symbols}"
 futures_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="futures")]
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Alle Futures-Symbole: {futures_symbols}", str(uuid.uuid4()))
 
+
 # Strategie-Instanzen für beide Typen
 strategies = get_strategy(config)
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Strategien geladen: {list(strategies.keys())}", str(uuid.uuid4()))
 spot_strategy = strategies['spot_long']
 futures_strategy = strategies['futures_short']
 
-# Trader-Instanzen pro Symbol und Typ
-spot_traders = {symbol: SpotLongTrader(config, symbol, data_fetcher=data_fetcher) for symbol in spot_symbols}
+# Strategie-Konfiguration nur einmal laden
+try:
+    with open(STRATEGY_PATH, encoding="utf-8") as f:
+        strategy_cfg = yaml.safe_load(f)
+except Exception:
+    strategy_cfg = {}
+
+# Trader-Instanzen pro Symbol und Typ, strategy_cfg wird übergeben
+spot_traders = {symbol: SpotLongTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in spot_symbols}
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Spot-Trader Instanzen: {list(spot_traders.keys())}", str(uuid.uuid4()))
-futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_fetcher) for symbol in futures_symbols}
+futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in futures_symbols}
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Trader Instanzen: {list(futures_traders.keys())}", str(uuid.uuid4()))
+
+# Lade offene Trades für alle Trader (Spot-Long und Futures-Short)
+for trader in spot_traders.values():
+    trader.load_last_open_trade('long', 'spot')
+for trader in futures_traders.values():
+    trader.load_last_open_trade('short', 'futures')
 
 # Sende Startnachricht mit wichtigsten Infos (nur einmal)
 startup_msg = format_startup_message(config)

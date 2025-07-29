@@ -24,13 +24,14 @@ class BaseTrader:
     """
     Basisklasse für Trader-Logik (Spot/Futures). Verwaltet Symbol, Konfiguration, Exchange, Logging und Telegram.
     """
-    def __init__(self, config: dict, symbol: str, data_fetcher: Optional[DataFetcher] = None, exchange: Optional[Any] = None):
+    def __init__(self, config: dict, symbol: str, data_fetcher: Optional[DataFetcher] = None, exchange: Optional[Any] = None, strategy_config: Optional[dict] = None):
         """
         Args:
             config: Konfigurations-Dictionary
             symbol: Handelssymbol (z.B. 'BTC/USDT')
             data_fetcher: Optionaler DataFetcher
             exchange: Optionales Exchange-Objekt
+            strategy_config: Optionales Strategy-Config-Dict (z.B. aus strategy_high_volatility_breakout_momentum.yaml)
         """
         self.config = config
         self.symbol = symbol
@@ -41,6 +42,40 @@ class BaseTrader:
         self.exchange = exchange if exchange is not None else None
         self.open_trade: Optional[Dict[str, Any]] = None
         self.last_candle_time: Optional[pd.Timestamp] = None
+        self.strategy_config = strategy_config or {}
+
+    def load_last_open_trade(self, side: str, market_type: str) -> None:
+        """
+        Lädt den letzten offenen Trade für das aktuelle Symbol, Seite und Markt aus der DB und setzt self.open_trade.
+        Lädt auch das aktuelle OHLCV-DataFrame nach (self.open_trade['df']) mit fetch_ohlcv_single.
+        Verwendet die transaction_id des Trades für Logging.
+        """
+        trade = self.data.get_last_open_trade(self.symbol, side, market_type)
+        transaction_id = trade.get('transaction_id') if trade and 'transaction_id' in trade else str(uuid.uuid4())
+        if trade:
+            # OHLCV-Daten gezielt nachladen (fetch_ohlcv_single)
+            try:
+                # Fix: timeframe aus 'trading' statt 'data' lesen
+                timeframe = self.config['trading']['timeframe']
+                df = self.data.fetch_ohlcv_single(self.symbol, market_type, timeframe, transaction_id, limit=50)
+                if df is not None:
+                    trade['df'] = df
+            except Exception as e:
+                self.data.save_log(LOG_WARN, 'trader', 'load_last_open_trade', f"Konnte OHLCV für offenen Trade nicht laden: {e}", transaction_id)
+            # Signal-Objekt-Sicherheit (wie im Rest des Codes)
+            signal = trade.get('signal', {})
+            if isinstance(signal, dict):
+                class SignalObj:
+                    pass
+                signal_obj = SignalObj()
+                for k, v in signal.items():
+                    setattr(signal_obj, k, v)
+                trade['signal'] = signal_obj
+            self.open_trade = trade
+            self.data.save_log(LOG_INFO, 'trader', 'load_last_open_trade', f"Offener Trade geladen: {trade}", transaction_id)
+        else:
+            self.open_trade = None
+            self.data.save_log(LOG_INFO, 'trader', 'load_last_open_trade', f"Kein offener Trade für {self.symbol} ({side}, {market_type}) gefunden.", str(uuid.uuid4()))
 
     def handle_open_trade(self, strategy, transaction_id: str, market_type: str, side: str) -> Optional[str]:
         """
@@ -50,8 +85,18 @@ class BaseTrader:
             return None
         symbol = self.open_trade['symbol']
         df = self.open_trade['df']
+        # --- Signal-Objekt-Sicherheit: dict zu Objekt konvertieren falls nötig ---
+        signal = self.open_trade['signal']
+        if isinstance(signal, dict):
+            class SignalObj:
+                pass
+            signal_obj = SignalObj()
+            for k, v in signal.items():
+                setattr(signal_obj, k, v)
+            self.open_trade['signal'] = signal_obj
+            signal = signal_obj
         self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_open_trade', f"[{market_type.upper()}] Überwache offenen Trade für {symbol}.", transaction_id)
-        exit_type = self.monitor_trade(self.open_trade['signal'], df, strategy, transaction_id)
+        exit_type = self.monitor_trade(signal, df, strategy, transaction_id)
         if exit_type:
             self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_open_trade', f"[MAIN] {market_type.capitalize()}-{side.capitalize()}-Trade für {symbol} geschlossen: {exit_type}", transaction_id)
             self.send_telegram(f"{market_type.capitalize()}-{side.capitalize()}-Trade für {symbol} geschlossen: {exit_type}")
@@ -141,9 +186,10 @@ class BaseTrader:
         except Exception as e:
             self.data.save_log(LOG_WARN, 'trader', 'send_telegram', f"Telegram error: {e}\n{traceback.format_exc()}", transaction_id or str(uuid.uuid4()))
 
-    def get_trade_volume(self, signal: Any) -> float:
+    def get_trade_volume(self, signal: Any, transaction_id: str = None) -> float:
         """
-        Berechnet das Handelsvolumen basierend auf Risiko und verfügbarem Guthaben.
+        Berechnet das Handelsvolumen so, dass pro Trade maximal den in der Strategy-Config angegebenen stake_percent und risk_percent verwendet werden.
+        Es wird ein Fehler geloggt und ausgelöst, wenn einer der Werte fehlt oder ungültig ist.
         Args:
             signal: Signal-Objekt mit entry, stop_loss, volume
         Returns:
@@ -151,28 +197,50 @@ class BaseTrader:
         """
         try:
             if signal.entry is None or signal.stop_loss is None or signal.volume is None:
-                self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"Signalwerte fehlen: entry={signal.entry}, stop_loss={signal.stop_loss}, volume={signal.volume}")
+                self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"Signalwerte fehlen: entry={signal.entry}, stop_loss={signal.stop_loss}, volume={signal.volume}", transaction_id)
                 return 0.0
             balance = self.exchange.fetch_balance()
-            quote = self.symbol.split('/')[1]
+            # Symbol-Parsing: unterstützt sowohl 'DOGE/USDT' als auch 'DOGEUSDT'
+            if '/' in self.symbol:
+                quote = self.symbol.split('/')[1]
+            else:
+                # Fallback: Letzte 4 Zeichen als Quote-Asset (z.B. USDT, BUSD, USDC)
+                quote = self.symbol[-4:]
             available = balance[quote]['free'] if quote in balance else 0
-            risk_percent = self.config['trading'].get('risk_percent', 1) / 100.0
+            # stake_percent und risk_percent MÜSSEN in strategy_config vorhanden sein
+            if 'stake_percent' not in self.strategy_config or 'risk_percent' not in self.strategy_config:
+                msg = f"stake_percent oder risk_percent fehlt in strategy_config! strategy_config: {self.strategy_config}"
+                self.data.save_log(LOG_ERROR, 'trader', 'get_trade_volume', msg, transaction_id)
+                raise ValueError(msg)
+            try:
+                stake_percent = float(self.strategy_config['stake_percent'])
+                risk_percent = float(self.strategy_config['risk_percent'])
+            except Exception as e:
+                msg = f"stake_percent oder risk_percent in strategy_config ungültig: {e} | strategy_config: {self.strategy_config}"
+                self.data.save_log(LOG_ERROR, 'trader', 'get_trade_volume', msg, transaction_id)
+                raise ValueError(msg)
+            max_stake = available * stake_percent
             max_loss = available * risk_percent
             risk_per_unit = abs(signal.entry - signal.stop_loss)
             if risk_per_unit == 0:
-                self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', "Stop-Loss gleich Entry, Volumen auf Minimum gesetzt.")
-                return min(available, signal.volume)
-            volume = max_loss / risk_per_unit
-            return min(volume, signal.volume, available)
+                self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', "Stop-Loss gleich Entry, Volumen auf Minimum gesetzt.", transaction_id)
+                return min(max_stake / signal.entry, signal.volume, available)
+            # Volumen, sodass maximal max_loss beim Stop-Loss entsteht
+            risk_volume = max_loss / risk_per_unit
+            # Volumen, sodass maximal max_stake eingesetzt wird
+            stake_volume = max_stake / signal.entry
+            # Nimm das Minimum aus stake_volume, risk_volume, signal.volume, available
+            volume = min(stake_volume, risk_volume, signal.volume, available)
+            return volume
         except Exception as e:
-            self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"Konnte Guthaben nicht abrufen, nutze Signal-Volumen: {e}\n{traceback.format_exc()}")
-            return signal.volume if hasattr(signal, 'volume') and signal.volume is not None else 0.0
+            self.data.save_log(LOG_ERROR, 'trader', 'get_trade_volume', f"Fehler bei Volumenberechnung: {e}\n{traceback.format_exc()}", transaction_id)
+            raise
 
 class SpotLongTrader(BaseTrader):
     """ Spot-Trader für Long-Positionen."""
-    def __init__(self, config, symbol, data_fetcher=None, exchange=None):
-        """Initialisiert den SpotLongTrader mit Konfiguration, Symbol und optionalem Exchange."""
-        super().__init__(config, symbol, data_fetcher, exchange)
+    def __init__(self, config, symbol, data_fetcher=None, exchange=None, strategy_config=None):
+        """Initialisiert den SpotLongTrader mit Konfiguration, Symbol und optionalem Exchange und Strategy-Config."""
+        super().__init__(config, symbol, data_fetcher, exchange, strategy_config)
         if self.exchange is None:
             api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
             api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')
@@ -244,7 +312,7 @@ class SpotLongTrader(BaseTrader):
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für execute_trade")
         self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Starte execute_trade für {self.symbol} (LONG). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}", transaction_id)
-        volume = self.get_trade_volume(signal)
+        volume = self.get_trade_volume(signal, transaction_id)
         self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Berechnetes Volumen für {self.symbol}: {volume}", transaction_id)
         msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
         parent_trade_id = str(uuid.uuid4())
@@ -364,9 +432,9 @@ class SpotLongTrader(BaseTrader):
 
 class FuturesShortTrader(BaseTrader):
     """ Futures-Trader für Short-Positionen."""
-    def __init__(self, config, symbol, data_fetcher=None, exchange=None):
-        """Initialisiert den FuturesShortTrader mit Konfiguration, Symbol und optionalem Exchange."""
-        super().__init__(config, symbol, data_fetcher, exchange)
+    def __init__(self, config, symbol, data_fetcher=None, exchange=None, strategy_config=None):
+        """Initialisiert den FuturesShortTrader mit Konfiguration, Symbol und optionalem Exchange und Strategy-Config."""
+        super().__init__(config, symbol, data_fetcher, exchange, strategy_config)
         if self.exchange is None:
             api_key = os.getenv('BINANCE_API_KEY') or config['binance'].get('api_key')
             api_secret = os.getenv('BINANCE_API_SECRET') or config['binance'].get('api_secret')

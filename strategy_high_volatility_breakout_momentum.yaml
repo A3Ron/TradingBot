@@ -1,5 +1,6 @@
 name: high_volatility_breakout_momentum
-risk_percent: 5.0 # Prozent des Kapitals, das pro Trade riskiert wird
+risk_percent: 0.05 # Prozent des Kapitals, das pro Trade riskiert wird
+stake_percent: 0.05 # Prozent des Kapitals, das pro Trade eingesetzt wird
 stop_loss_buffer: 0.0 # Buffer für Stop-Loss, um Slippage zu vermeiden
 params:
   stop_loss_pct: 0.03 # 3% Stop-Loss
