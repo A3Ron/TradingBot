@@ -125,11 +125,14 @@ data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Trader Instanzen: {list(fu
 
 # Sende Startup-Nachricht mit wichtigsten Infos (nur einmal)
 startup_msg = format_startup_message(config)
-data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Startup-Message wird gesendet.', str(uuid.uuid4()))
 if not spot_traders:
+    data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Startup-Message wird gesendet.', str(uuid.uuid4()))
     spot_traders.send_telegram(startup_msg)
 elif not futures_traders:
+    data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Startup-Message wird gesendet.', str(uuid.uuid4()))
     futures_traders.send_telegram(startup_msg)
+else:
+    data_fetcher.save_log(LOG_WARNING, MAIN, INIT, "Keine Trader-Instanzen vorhanden, Startup-Nachricht nicht gesendet.", str(uuid.uuid4()))
 
 # --- Hauptloop ---
 while True:
