@@ -131,22 +131,15 @@ data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Spot-Trader Instanzen: {list(spot_
 futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in futures_symbols}
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Trader Instanzen: {list(futures_traders.keys())}", str(uuid.uuid4()))
 
+startup_msg = format_startup_message(config)
+
 # Lade offene Trades für alle Trader (Spot-Long und Futures-Short)
 for trader in spot_traders.values():
+    trader.send_telegram(startup_msg)
     trader.load_last_open_trade('long', 'spot')
 for trader in futures_traders.values():
     trader.load_last_open_trade('short', 'futures')
-
-# Sende Startnachricht mit wichtigsten Infos (nur einmal)
-startup_msg = format_startup_message(config)
-data_fetcher.save_log('INFO', 'main', 'init', 'Startup-Message wird gesendet.', str(uuid.uuid4()))
-if spot_traders:
-    # Sende über den ersten Spot-Trader, falls vorhanden
-    list(spot_traders.values())[0].send_telegram(startup_msg)
-elif futures_traders:
-    # Sonst über den ersten Futures-Trader
-    list(futures_traders.values())[0].send_telegram(startup_msg)
-
+    
 # --- Hauptloop ---
 while True:
     transaction_id = str(uuid.uuid4())
@@ -173,6 +166,6 @@ while True:
             # Übergebe die gesamte OHLCV-Liste an die zentrale handle_trades-Methode des ersten Futures-Traders
             list(futures_traders.values())[0].handle_trades(futures_strategy, ohlcv_list=futures_ohlcv_list, transaction_id=transaction_id)
 
-        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f'Loop fertig, warte {30} Sekunden.', transaction_id)
+        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f'Loop fertig', transaction_id)
     except Exception as e:
         data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Error: {e}", transaction_id)
