@@ -138,6 +138,7 @@ for trader in spot_traders.values():
     trader.send_telegram(startup_msg)
     trader.load_last_open_trade('long', 'spot')
 for trader in futures_traders.values():
+    trader.send_telegram(startup_msg)
     trader.load_last_open_trade('short', 'futures')
 
 # --- Hauptloop ---
