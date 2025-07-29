@@ -88,7 +88,18 @@ class BaseTrader:
             else:
                 self.data.save_log(LOG_WARN, self.__class__.__name__, 'handle_new_trade_candidate', f"[{market_type.upper()}] Trade für {symbol} wurde nicht ausgeführt (execute_trade lieferte None).", transaction_id)
         except Exception as e:
-            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_new_trade_candidate', f"Fehler beim Ausführen des {market_type.capitalize()}-{side.capitalize()}-Trades für {symbol}: {e}", transaction_id)
+            # Logge das Signal-Objekt und seine Attribute im Fehlerfall
+            signal_info = signal
+            signal_keys = list(signal.keys()) if hasattr(signal, 'keys') else str(type(signal))
+            self.data.save_log(
+                LOG_ERROR,
+                self.__class__.__name__,
+                'handle_new_trade_candidate',
+                f"Fehler beim Ausführen des {market_type.capitalize()}-{side.capitalize()}-Trades für {symbol}: {e}\n"
+                f"Signal-Dict: {signal_info}\n"
+                f"Signal-Keys: {signal_keys}",
+                transaction_id
+            )
 
     def close_trade(self, market_type: str, side: str, qty: float, price: float, exit_type: str, transaction_id: str) -> None:
         if not transaction_id:
