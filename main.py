@@ -139,7 +139,7 @@ for trader in spot_traders.values():
     trader.load_last_open_trade('long', 'spot')
 for trader in futures_traders.values():
     trader.load_last_open_trade('short', 'futures')
-    
+
 # --- Hauptloop ---
 while True:
     transaction_id = str(uuid.uuid4())
@@ -155,6 +155,10 @@ while True:
         spot_ohlcv_list = data_fetcher.fetch_ohlcv(spot_symbols, market_type='spot', timeframe=timeframe, transaction_id=transaction_id, limit=price_change_periods + 15)
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Bearbeite Spot-Trades...', transaction_id)
         if spot_traders:
+            # Debug-Log für alle Spot-Trader: Status von open_trade
+            for symbol, trader in spot_traders.items():
+                open_trade_status = f"{trader.open_trade}" if trader.open_trade else "None"
+                data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"SpotTrader {symbol}: open_trade={open_trade_status}", transaction_id)
             # Übergebe die gesamte OHLCV-Liste an die zentrale handle_trades-Methode des ersten Spot-Traders
             list(spot_traders.values())[0].handle_trades(spot_strategy, ohlcv_list=spot_ohlcv_list, transaction_id=transaction_id)
 
@@ -163,6 +167,10 @@ while True:
         futures_ohlcv_list = data_fetcher.fetch_ohlcv(futures_symbols, market_type='futures', timeframe=timeframe, transaction_id=transaction_id, limit=price_change_periods + 15)
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Bearbeite Futures-Trades...', transaction_id)
         if futures_traders:
+            # Debug-Log für alle Futures-Trader: Status von open_trade
+            for symbol, trader in futures_traders.items():
+                open_trade_status = f"{trader.open_trade}" if trader.open_trade else "None"
+                data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"FuturesTrader {symbol}: open_trade={open_trade_status}", transaction_id)
             # Übergebe die gesamte OHLCV-Liste an die zentrale handle_trades-Methode des ersten Futures-Traders
             list(futures_traders.values())[0].handle_trades(futures_strategy, ohlcv_list=futures_ohlcv_list, transaction_id=transaction_id)
 

@@ -13,6 +13,8 @@ import requests
 import traceback
 import sys
 import uuid
+import json
+import numpy as np
 
 
 load_dotenv()
@@ -388,6 +390,21 @@ class DataFetcher:
             elif trade_dict['status'] == 'closed':
                 if 'parent_trade_id' not in trade_dict or not trade_dict['parent_trade_id']:
                     raise ValueError("parent_trade_id muss für geschlossene Trades gesetzt sein!")
+
+            # --- Serialisierung von fee und extra, falls dict ---
+            if 'fee' in trade_dict and isinstance(trade_dict['fee'], dict):
+                trade_dict['fee'] = json.dumps(trade_dict['fee'])
+            if 'extra' in trade_dict and isinstance(trade_dict['extra'], dict):
+                trade_dict['extra'] = json.dumps(trade_dict['extra'])
+
+            # --- Konvertiere alle numpy-Typen zu nativen Python-Typen ---
+            try:
+                for k, v in list(trade_dict.items()):
+                    # np.generic deckt np.float64, np.int64, etc. ab
+                    if isinstance(v, np.generic):
+                        trade_dict[k] = v.item()
+            except ImportError:
+                pass  # numpy nicht installiert, ignoriere
 
             session.execute(sqlalchemy.text("""
                 INSERT INTO trades (id, transaction_id, parent_trade_id, symbol_id, market_type, timestamp, side, status, qty, price, fee, profit, order_id, extra)

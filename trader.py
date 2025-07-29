@@ -236,38 +236,6 @@ class BaseTrader:
             stake_volume = max_stake / signal.entry
             # Nimm das Minimum aus stake_volume, risk_volume, signal.volume, available
             volume = min(stake_volume, risk_volume, signal.volume, available)
-
-            # --- Binance minNotional-Check ---
-            try:
-                markets = self.exchange.load_markets()
-                market = markets[self.symbol] if self.symbol in markets else None
-                min_notional = None
-                if market and 'limits' in market and 'cost' in market['limits'] and market['limits']['cost']:
-                    min_notional = market['limits']['cost'].get('min')
-                if not min_notional and 'info' in market and 'filters' in market['info']:
-                    for f in market['info']['filters']:
-                        if f.get('filterType') == 'MIN_NOTIONAL':
-                            min_notional = float(f.get('notional', 0)) or float(f.get('minNotional', 0))
-                if not min_notional or min_notional <= 0:
-                    self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"minNotional für {self.symbol} konnte nicht bestimmt werden.", transaction_id)
-                    # Im Zweifel trotzdem versuchen, aber loggen
-                    min_notional = 0
-                # Orderwert berechnen
-                order_value = volume * float(signal.entry)
-                min_required = min_notional * 1.1 if min_notional > 0 else 0
-                if min_notional > 0 and order_value < min_required:
-                    # Volumen erhöhen, falls möglich
-                    min_volume = min_required / float(signal.entry)
-                    if min_volume <= available:
-                        self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"Orderwert ({order_value}) < minNotional*1.1 ({min_required}). Volumen wird auf {min_volume} erhöht.", transaction_id)
-                        volume = min_volume
-                    else:
-                        self.data.save_log(LOG_ERROR, 'trader', 'get_trade_volume', f"Orderwert ({order_value}) < minNotional*1.1 ({min_required}) und Guthaben reicht nicht. Kein Trade.", transaction_id)
-                        return 0.0
-            except Exception as e:
-                self.data.save_log(LOG_WARN, 'trader', 'get_trade_volume', f"Fehler beim minNotional-Check: {e}", transaction_id)
-                # Im Zweifel trotzdem versuchen
-
             return volume
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'get_trade_volume', f"Fehler bei Volumenberechnung: {e}\n{traceback.format_exc()}", transaction_id)
