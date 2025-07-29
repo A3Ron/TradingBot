@@ -54,7 +54,6 @@ def create_tables(engine):
         Column('id', UUID, primary_key=True, server_default=text('gen_random_uuid()')),
         Column('symbol', String(32), index=True),
         Column('symbol_type', String),
-        Column('selected', Boolean),
         Column('base_asset', String(32)),
         Column('quote_asset', String(32)),
         Column('min_qty', Float),
