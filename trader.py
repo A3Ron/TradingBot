@@ -64,11 +64,16 @@ class BaseTrader:
     def handle_new_trade_candidate(self, candidate: dict, strategy, transaction_id: str, market_type: str, side: str, execute_trade_method) -> None:
         """
         Handles a new trade candidate: executes the trade and manages state/logging.
+        Ensures signal is a dict (not a pandas Series) before attribute assignment.
         """
         symbol = candidate['symbol']
         signal = candidate['signal']
         self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[{market_type.upper()}] Führe Trade aus für {symbol} mit Vol-Score {candidate['vol_score']}", transaction_id)
         try:
+            # Convert signal to dict if it's a pandas Series
+            if hasattr(signal, 'to_dict'):
+                signal = signal.to_dict()
+                candidate['signal'] = signal
             # Erzeuge ein Dummy-Objekt mit Attributen für execute_trade
             class SignalObj:
                 pass
