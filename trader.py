@@ -127,7 +127,7 @@ class BaseTrader:
         self.data.save_trade(trade_dict, transaction_id)
         self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_type}): {trade_dict}", transaction_id)
 
-    def send_telegram(self, message: str) -> None:
+    def send_telegram(self, message: str, transaction_id: str = None) -> None:
         """
         Sendet eine Telegram-Nachricht, falls Token und Chat-ID gesetzt sind.
         """
@@ -139,7 +139,7 @@ class BaseTrader:
         try:
             requests.post(url, data=data)
         except Exception as e:
-            self.data.save_log(LOG_WARN, 'trader', f"Telegram error: {e}\n{traceback.format_exc()}", str(uuid.uuid4()))
+            self.data.save_log(LOG_WARN, 'trader', 'send_telegram', f"Telegram error: {e}\n{traceback.format_exc()}", transaction_id or str(uuid.uuid4()))
 
     def get_trade_volume(self, signal: Any) -> float:
         """
@@ -187,7 +187,7 @@ class SpotLongTrader(BaseTrader):
                     'options': {'defaultType': 'spot'}
                 })
             except Exception as e:
-                self.data.save_log(LOG_ERROR, 'trader', f'Fehler bei Exchange-Initialisierung: {e}', str(uuid.uuid4()))
+                self.data.save_log(LOG_ERROR, 'trader', 'init_exchange', f'Fehler bei Exchange-Initialisierung: {e}', str(uuid.uuid4()))
                 raise
 
     def handle_trades(self, strategy, ohlcv_list, transaction_id):
