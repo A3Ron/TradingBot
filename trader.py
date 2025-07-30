@@ -246,7 +246,7 @@ class BaseTrader:
                 transaction_id
             )
 
-    def close_trade(self, market_type: str, trade_side: str, trade_volume: float, exit_price: float, exit_reason: str, transaction_id: str) -> None:
+    def close_trade(self, market_type: str, trade_side: str, trade_volume: float, exit_price: float, exit_reason: str, transaction_id: str, require_order: bool = True) -> None:
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für close_trade")
         parent_trade_id = None
@@ -297,6 +297,10 @@ class BaseTrader:
         if trade_volume is None or trade_volume == 0.0:
             warn_message = f"[WARN] close_trade wird mit trade_volume={trade_volume} aufgerufen! Symbol={self.symbol}, side={trade_side}, exit_price={exit_price}, exit_reason={exit_reason}, transaction_id={transaction_id}"
             self.data.save_log(LOG_WARN, 'trader', 'close_trade', warn_message, transaction_id)
+            if require_order:
+                # Kein echter Exit, Trade NICHT als geschlossen speichern
+                self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade NICHT als geschlossen gespeichert, da keine Order ausgeführt werden konnte. Kontext: {warn_message}", transaction_id)
+                return
 
         # Fee aus open_trade übernehmen, falls vorhanden
         fee_paid = 0.0
@@ -485,10 +489,10 @@ class SpotLongTrader(BaseTrader):
                 'timestamp': pd.Timestamp.utcnow(),
                 'side': 'long',
                 'trade_volume': volume,
-                'entry_price': signal.entry,
-                'stop_loss_price': signal.stop_loss,
-                'take_profit_price': signal.take_profit,
-                'signal_volume': getattr(signal, 'volume', None),
+                'entry_price': getattr(signal, 'entry_price', None) or getattr(signal, 'entry', None),
+                'stop_loss_price': getattr(signal, 'stop_loss_price', None) or getattr(signal, 'stop_loss', None),
+                'take_profit_price': getattr(signal, 'take_profit_price', None) or getattr(signal, 'take_profit', None),
+                'signal_volume': getattr(signal, 'signal_volume', None) or getattr(signal, 'volume', None),
                 'fee_paid': 0.0,
                 'profit_realized': 0.0,
                 'order_identifier': 'testnet',
@@ -520,10 +524,10 @@ class SpotLongTrader(BaseTrader):
                 'timestamp': pd.Timestamp.utcnow(),
                 'side': 'long',
                 'trade_volume': order.get('amount', volume),
-                'entry_price': signal.entry,
-                'stop_loss_price': signal.stop_loss,
-                'take_profit_price': signal.take_profit,
-                'signal_volume': getattr(signal, 'volume', None),
+                'entry_price': getattr(signal, 'entry_price', None) or getattr(signal, 'entry', None),
+                'stop_loss_price': getattr(signal, 'stop_loss_price', None) or getattr(signal, 'stop_loss', None),
+                'take_profit_price': getattr(signal, 'take_profit_price', None) or getattr(signal, 'take_profit', None),
+                'signal_volume': getattr(signal, 'signal_volume', None) or getattr(signal, 'volume', None),
                 'fee_paid': order.get('fee', 0.0) if isinstance(order, dict) else 0.0,
                 'profit_realized': 0.0,
                 'order_identifier': str(order.get('id', '')) if isinstance(order, dict) else '',
@@ -776,10 +780,10 @@ class FuturesShortTrader(BaseTrader):
                 'timestamp': pd.Timestamp.utcnow(),
                 'side': 'short',
                 'trade_volume': volume,
-                'entry_price': signal.entry,
-                'stop_loss_price': signal.stop_loss,
-                'take_profit_price': signal.take_profit,
-                'signal_volume': getattr(signal, 'volume', None),
+                'entry_price': getattr(signal, 'entry_price', None) or getattr(signal, 'entry', None),
+                'stop_loss_price': getattr(signal, 'stop_loss_price', None) or getattr(signal, 'stop_loss', None),
+                'take_profit_price': getattr(signal, 'take_profit_price', None) or getattr(signal, 'take_profit', None),
+                'signal_volume': getattr(signal, 'signal_volume', None) or getattr(signal, 'volume', None),
                 'fee_paid': 0.0,
                 'profit_realized': 0.0,
                 'order_identifier': 'testnet',
@@ -801,17 +805,38 @@ class FuturesShortTrader(BaseTrader):
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Short-Order ausgeführt: {order}", transaction_id)
             self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             signal.volume = order.get('amount', volume)
+            # --- Fee Extraction Robust ---
+            fee_paid = 0.0
+            try:
+                if isinstance(order, dict):
+                    if 'fee' in order and order['fee']:
+                        fee_paid = float(order['fee'])
+                    elif 'fees' in order and order['fees']:
+                        # fees kann Liste oder dict sein
+                        if isinstance(order['fees'], list) and len(order['fees']) > 0:
+                            fee_paid = sum(float(f.get('cost', 0.0)) for f in order['fees'] if isinstance(f, dict))
+                        elif isinstance(order['fees'], dict):
+                            fee_paid = float(order['fees'].get('cost', 0.0))
+                    elif 'info' in order and isinstance(order['info'], dict):
+                        # Binance liefert fee evtl. in info
+                        if 'commission' in order['info']:
+                            fee_paid = float(order['info']['commission'])
+                        elif 'fees' in order['info'] and isinstance(order['info']['fees'], list):
+                            fee_paid = sum(float(f.get('commission', 0.0)) for f in order['info']['fees'] if isinstance(f, dict))
+            except Exception as e:
+                self.data.save_log(LOG_WARN, 'trader', 'execute_trade', f"Fee-Parsing fehlgeschlagen: {e} | Order: {order}", transaction_id)
+            # --- End Fee Extraction ---
             trade_data = {
                 'symbol': self.symbol,
                 'market_type': 'futures',
                 'timestamp': pd.Timestamp.utcnow(),
                 'side': 'short',
                 'trade_volume': order.get('amount', volume),
-                'entry_price': signal.entry,
-                'stop_loss_price': signal.stop_loss,
-                'take_profit_price': signal.take_profit,
-                'signal_volume': getattr(signal, 'volume', None),
-                'fee_paid': order.get('fee', 0.0) if isinstance(order, dict) else 0.0,
+                'entry_price': getattr(signal, 'entry_price', None) or getattr(signal, 'entry', None),
+                'stop_loss_price': getattr(signal, 'stop_loss_price', None) or getattr(signal, 'stop_loss', None),
+                'take_profit_price': getattr(signal, 'take_profit_price', None) or getattr(signal, 'take_profit', None),
+                'signal_volume': getattr(signal, 'signal_volume', None) or getattr(signal, 'volume', None),
+                'fee_paid': fee_paid,
                 'profit_realized': 0.0,
                 'order_identifier': str(order.get('id', '')) if isinstance(order, dict) else '',
                 'extra': str(order),
@@ -835,13 +860,29 @@ class FuturesShortTrader(BaseTrader):
         position_amt = trade.volume
         try:
             positions = self.exchange.fetch_positions([self.symbol])
+            found = False
             for pos in positions:
                 if pos.get('symbol') == self.symbol and pos.get('side', '').lower() == 'short':
-                    amt = abs(float(pos.get('contracts', pos.get('positionAmt', 0))))
+                    # Robust: prüfe beide Felder, logge beide, Fehler wenn beide fehlen
+                    contracts = pos.get('contracts', None)
+                    position_amt_field = pos.get('positionAmt', None)
+                    self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"Position-Objekt: {pos}", transaction_id)
+                    if contracts is not None and position_amt_field is not None:
+                        amt = abs(float(contracts)) if abs(float(contracts)) > 0 else abs(float(position_amt_field))
+                    elif contracts is not None:
+                        amt = abs(float(contracts))
+                    elif position_amt_field is not None:
+                        amt = abs(float(position_amt_field))
+                    else:
+                        raise ValueError(f"Weder 'contracts' noch 'positionAmt' im Positionsobjekt vorhanden: {pos}")
                     if amt > 0:
                         position_amt = amt
+                        found = True
+            if not found:
+                raise ValueError(f"Keine offene Short-Position für {self.symbol} gefunden! Positionen: {positions}")
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Abfragen der offenen Short-Position: {e}", transaction_id)
+            raise
         # Take-Profit Exit
         if current_price <= trade.take_profit:
             entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0

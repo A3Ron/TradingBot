@@ -4,12 +4,12 @@ stake_percent: 0.05 # Prozent des Kapitals, das pro Trade eingesetzt wird
 stop_loss_buffer: 0.0 # Buffer für Stop-Loss, um Slippage zu vermeiden
 params:
   stop_loss_pct: 0.03 # 3% Stop-Loss
-  take_profit_pct: 0.07 # 7% Take-Profit
-  trailing_trigger_pct: 0.02 # Trailing Stop wird bei 2% Gewinn aktiviert
+  take_profit_pct: 0.08 # 8% Take-Profit
+  trailing_trigger_pct: 0.04 # Trailing Stop wird bei 4% Gewinn aktiviert
   price_change_pct: 0.015 # 1.5% Preisänderung für Long- oder Short-Signal
   price_change_periods: 5 # 5 Perioden für Preisänderung
-  volume_mult: 1.2 # Multiplikator für Volumen
-  rsi_long: 52 # RSI-Schwelle für Long-Einstieg
+  volume_mult: 1.3 # Multiplikator für Volumen
+  rsi_long: 53 # RSI-Schwelle für Long-Einstieg
   rsi_short: 43 # RSI-Schwelle für Short-Einstieg
   rsi_tp_exit: 50 # RSI-Schwelle für Take-Profit-Exit
   rsi_period: 14 # RSI-Berechnungsperiode
