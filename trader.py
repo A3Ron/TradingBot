@@ -863,7 +863,6 @@ class FuturesShortTrader(BaseTrader):
             found = False
             for pos in positions:
                 if pos.get('symbol') == self.symbol and pos.get('side', '').lower() == 'short':
-                    # Robust: prüfe beide Felder, logge beide, Fehler wenn beide fehlen
                     contracts = pos.get('contracts', None)
                     position_amt_field = pos.get('positionAmt', None)
                     self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"Position-Objekt: {pos}", transaction_id)
@@ -874,15 +873,21 @@ class FuturesShortTrader(BaseTrader):
                     elif position_amt_field is not None:
                         amt = abs(float(position_amt_field))
                     else:
-                        raise ValueError(f"Weder 'contracts' noch 'positionAmt' im Positionsobjekt vorhanden: {pos}")
+                        # Fehlerhafter Positions-Objekt, Trade schließen
+                        self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Weder 'contracts' noch 'positionAmt' im Positionsobjekt vorhanden: {pos}", transaction_id)
+                        self.close_trade('futures', 'short', 0.0, current_price, 'error_position_fields_missing', transaction_id)
+                        return 'error_position_fields_missing'
                     if amt > 0:
                         position_amt = amt
                         found = True
             if not found:
-                raise ValueError(f"Keine offene Short-Position für {self.symbol} gefunden! Positionen: {positions}")
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Keine offene Short-Position für {self.symbol} gefunden! Positionen: {positions}", transaction_id)
+                self.close_trade('futures', 'short', 0.0, current_price, 'error_no_short_position', transaction_id)
+                return 'error_no_short_position'
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Abfragen der offenen Short-Position: {e}", transaction_id)
-            raise
+            self.close_trade('futures', 'short', 0.0, current_price, 'error_position_fetch', transaction_id)
+            return 'error_position_fetch'
         # Take-Profit Exit
         if current_price <= trade.take_profit:
             entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
@@ -899,6 +904,8 @@ class FuturesShortTrader(BaseTrader):
                 err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Take-Profit BUY: {e} | PosAmt: {position_amt} | Preis: {current_price}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
                 self.send_telegram(err_msg)
+                self.close_trade('futures', 'short', position_amt, current_price, 'error_order_exec', transaction_id)
+                return 'error_order_exec'
             self.close_trade('futures', 'short', position_amt, current_price, 'take_profit', transaction_id)
             return "take_profit"
         if current_price >= trade.stop_loss:
@@ -916,6 +923,8 @@ class FuturesShortTrader(BaseTrader):
                 err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Stop-Loss BUY: {e} | PosAmt: {position_amt} | Preis: {current_price}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
                 self.send_telegram(err_msg)
+                self.close_trade('futures', 'short', position_amt, current_price, 'error_order_exec', transaction_id)
+                return 'error_order_exec'
             self.close_trade('futures', 'short', position_amt, current_price, 'stop_loss', transaction_id)
             return "stop_loss"
         # Momentum-Exit (step-by-step debug)
