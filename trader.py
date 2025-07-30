@@ -314,26 +314,23 @@ class BaseTrader:
                 except Exception:
                     fee = 0.0
 
-        trade_dict = {
+        trade_data = {
             'symbol': self.symbol,
             'market_type': market_type,
             'timestamp': pd.Timestamp.utcnow(),
             'side': side,
-            'qty': qty,
-            'price': price,
-            'fee': fee,
-            'profit': profit,
-            'order_id': order_id,
+            'trade_volume': qty,
+            'entry_price': entry_price,
+            'fee_paid': fee,
+            'profit_realized': profit,
+            'order_identifier': order_id,
             'extra': str(extra_info),
             'status': 'closed',
             'parent_trade_id': parent_trade_id,
-            'exit_type': exit_type
+            'exit_reason': exit_type
         }
-        if not self.validate_trade_dict(trade_dict, transaction_id):
-            self.data.save_log(LOG_ERROR, 'trader', 'close_trade', f"Ungültiges Trade-Dict beim Schließen: {trade_dict}", transaction_id)
-            return
-        self.data.save_trade(trade_dict, transaction_id)
-        self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_type}): {trade_dict}", transaction_id)
+        self.data.save_trade(trade_data, transaction_id)
+        self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_type}): {trade_data}", transaction_id)
 
     def send_telegram(self, message: str, transaction_id: str = None) -> None:
         """
@@ -485,22 +482,25 @@ class SpotLongTrader(BaseTrader):
         if self.mode == 'testnet':
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
             self.send_telegram(f"[TESTNET] {msg}")
-            trade_dict = {
+            trade_data = {
                 'symbol': self.symbol,
                 'market_type': 'testnet',
                 'timestamp': pd.Timestamp.utcnow(),
                 'side': 'long',
-                'qty': volume,
-                'price': signal.entry,
-                'fee': 0.0,
-                'profit': 0.0,
-                'order_id': 'testnet',
+                'trade_volume': volume,
+                'entry_price': signal.entry,
+                'stop_loss_price': signal.stop_loss,
+                'take_profit_price': signal.take_profit,
+                'signal_volume': getattr(signal, 'volume', None),
+                'fee_paid': 0.0,
+                'profit_realized': 0.0,
+                'order_identifier': 'testnet',
                 'extra': '[TESTNET]',
                 'status': 'open',
                 'parent_trade_id': parent_trade_id
             }
-            self.data.save_trade(trade_dict, transaction_id)
-            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_dict}", transaction_id)
+            self.data.save_trade(trade_data, transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_data}", transaction_id)
             signal.parent_trade_id = parent_trade_id
             return True
         try:
@@ -517,22 +517,25 @@ class SpotLongTrader(BaseTrader):
             )
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Order ausgeführt: {order}", transaction_id)
             self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
-            trade_dict = {
+            trade_data = {
                 'symbol': self.symbol,
                 'market_type': 'spot',
                 'timestamp': pd.Timestamp.utcnow(),
                 'side': 'long',
-                'qty': order.get('amount', volume),
-                'price': signal.entry,
-                'fee': order.get('fee', 0.0) if isinstance(order, dict) else 0.0,
-                'profit': 0.0,
-                'order_id': str(order.get('id', '')) if isinstance(order, dict) else '',
+                'trade_volume': order.get('amount', volume),
+                'entry_price': signal.entry,
+                'stop_loss_price': signal.stop_loss,
+                'take_profit_price': signal.take_profit,
+                'signal_volume': getattr(signal, 'volume', None),
+                'fee_paid': order.get('fee', 0.0) if isinstance(order, dict) else 0.0,
+                'profit_realized': 0.0,
+                'order_identifier': str(order.get('id', '')) if isinstance(order, dict) else '',
                 'extra': str(order),
                 'status': 'open',
                 'parent_trade_id': parent_trade_id
             }
-            self.data.save_trade(trade_dict, transaction_id)
-            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_dict}", transaction_id)
+            self.data.save_trade(trade_data, transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_data}", transaction_id)
             signal.parent_trade_id = parent_trade_id
             return order
         except Exception as e:
@@ -770,22 +773,25 @@ class FuturesShortTrader(BaseTrader):
         if self.mode == 'testnet':
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
             self.send_telegram(f"[TESTNET] {msg}")
-            trade_dict = {
+            trade_data = {
                 'symbol': self.symbol,
                 'market_type': 'testnet',
                 'timestamp': pd.Timestamp.utcnow(),
                 'side': 'short',
-                'qty': volume,
-                'price': signal.entry,
-                'fee': 0.0,
-                'profit': 0.0,
-                'order_id': 'testnet',
+                'trade_volume': volume,
+                'entry_price': signal.entry,
+                'stop_loss_price': signal.stop_loss,
+                'take_profit_price': signal.take_profit,
+                'signal_volume': getattr(signal, 'volume', None),
+                'fee_paid': 0.0,
+                'profit_realized': 0.0,
+                'order_identifier': 'testnet',
                 'extra': '[TESTNET]',
                 'status': 'open',
                 'parent_trade_id': parent_trade_id
             }
-            self.data.save_trade(trade_dict, transaction_id)
-            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_dict}", transaction_id)
+            self.data.save_trade(trade_data, transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Testnet-Trade gespeichert: {trade_data}", transaction_id)
             signal.parent_trade_id = parent_trade_id
             return True
         try:
@@ -798,22 +804,25 @@ class FuturesShortTrader(BaseTrader):
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Short-Order ausgeführt: {order}", transaction_id)
             self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             signal.volume = order.get('amount', volume)
-            trade_dict = {
+            trade_data = {
                 'symbol': self.symbol,
                 'market_type': 'futures',
                 'timestamp': pd.Timestamp.utcnow(),
                 'side': 'short',
-                'qty': order.get('amount', volume),
-                'price': signal.entry,
-                'fee': order.get('fee', 0.0) if isinstance(order, dict) else 0.0,
-                'profit': 0.0,
-                'order_id': str(order.get('id', '')) if isinstance(order, dict) else '',
+                'trade_volume': order.get('amount', volume),
+                'entry_price': signal.entry,
+                'stop_loss_price': signal.stop_loss,
+                'take_profit_price': signal.take_profit,
+                'signal_volume': getattr(signal, 'volume', None),
+                'fee_paid': order.get('fee', 0.0) if isinstance(order, dict) else 0.0,
+                'profit_realized': 0.0,
+                'order_identifier': str(order.get('id', '')) if isinstance(order, dict) else '',
                 'extra': str(order),
                 'status': 'open',
                 'parent_trade_id': parent_trade_id
             }
-            self.data.save_trade(trade_dict, transaction_id)
-            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_dict}", transaction_id)
+            self.data.save_trade(trade_data, transaction_id)
+            self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Trade in DB gespeichert: {trade_data}", transaction_id)
             signal.parent_trade_id = parent_trade_id
             return order
         except Exception as e:
