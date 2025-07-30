@@ -15,6 +15,7 @@ import sys
 import uuid
 import json
 import numpy as np
+from telegram import send_message
 
 load_dotenv()
 
@@ -175,7 +176,8 @@ class DataFetcher:
                     for key in ['entry', 'stop_loss', 'take_profit', 'volume']:
                         if key in extra_dict:
                             signal_params[key] = extra_dict[key]
-                except Exception:
+                except Exception as e:
+                    send_message(f"Fehler beim Parsen von extra_dict: {e}\n{traceback.format_exc()}")
                     pass
             # Fallbacks
             if 'entry' not in signal_params and row.price is not None:
@@ -198,6 +200,7 @@ class DataFetcher:
             return trade_dict
         except Exception as e:
             self.save_log(ERROR, DATA, 'get_last_open_trade', f"Fehler beim Laden des offenen Trades: {e}", str(uuid.uuid4()))
+            send_message(f"Fehler beim Laden des offenen Trades: {e}\n{traceback.format_exc()}")
             return None
         finally:
             session.close()
@@ -235,6 +238,7 @@ class DataFetcher:
             self.save_log(INFO, DATA, 'update_symbols_from_binance', f"Spot-Symbole von Binance aktualisiert: {spot_count}", str(uuid.uuid4()))
         except Exception as e:
             self.save_log(ERROR, DATA, 'update_symbols_from_binance', f"Spot-Symbole konnten nicht geladen werden: {e}", str(uuid.uuid4()))
+            send_message(f"Spot-Symbole konnten nicht geladen werden: {e}\n{traceback.format_exc()}")
 
         # Futures
         try:
@@ -266,6 +270,7 @@ class DataFetcher:
             self.save_log(INFO, DATA, 'update_symbols_from_binance', f"Futures-Symbole von Binance aktualisiert: {fut_count}", str(uuid.uuid4()))
         except Exception as e:
             self.save_log(ERROR, DATA, 'update_symbols_from_binance', f"Futures-Symbole konnten nicht geladen werden: {e}", str(uuid.uuid4()))
+            send_message(f"Futures-Symbole konnten nicht geladen werden: {e}\n{traceback.format_exc()}")
 
     def get_symbols_table(self) -> Table:
         """Lädt die Symbole-Tabelle."""
@@ -350,6 +355,7 @@ class DataFetcher:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df
         except Exception as e:
+            send_message(f"Trades DB-Load fehlgeschlagen: {e}\n{traceback.format_exc()}")
             self.save_log(ERROR, DATA, 'load_trades', f"Trades DB-Load fehlgeschlagen: {e}", transaction_id or str(uuid.uuid4()))
             return pd.DataFrame()
         finally:
@@ -407,7 +413,8 @@ class DataFetcher:
                 elif not isinstance(fee_val, (float, int)):
                     try:
                         trade_data['fee_paid'] = float(fee_val)
-                    except Exception:
+                    except Exception as e:
+                        send_message(f"Fee-Konvertierung fehlgeschlagen: {e}\n{traceback.format_exc()}")
                         trade_data['fee_paid'] = 0.0
             # Profit immer als float speichern
             if 'profit_realized' in trade_data:
@@ -415,7 +422,8 @@ class DataFetcher:
                 if not isinstance(profit_val, (float, int)):
                     try:
                         trade_data['profit_realized'] = float(profit_val)
-                    except Exception:
+                    except Exception as e:
+                        send_message(f"Profit-Konvertierung fehlgeschlagen: {e}\n{traceback.format_exc()}")
                         trade_data['profit_realized'] = 0.0
 
             # raw_order_data als JSON-String speichern, falls dict
@@ -447,6 +455,7 @@ class DataFetcher:
         except Exception as e:
             session.rollback()
             self.save_log(ERROR, DATA, 'save_trade', f"Trade DB-Save fehlgeschlagen: {e}", transaction_id)
+            send_message(f"Trade DB-Save fehlgeschlagen: {e}\n{traceback.format_exc()}")
         finally:
             session.close()
 
@@ -490,6 +499,7 @@ class DataFetcher:
                         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                     except Exception as e:
                         self.save_log(ERROR, DATA, 'fetch_ohlcv', f"Binance fetch_ohlcv failed: {e}\n{traceback.format_exc()}", transaction_id)
+                        send_message(f"Binance fetch_ohlcv failed: {e}\n{traceback.format_exc()}")
                         continue
                 if df is not None and not df.empty:
                     df['symbol'] = symbol
@@ -499,6 +509,7 @@ class DataFetcher:
                 continue
             except Exception as e:
                 self.save_log(ERROR, DATA, 'fetch_ohlcv', f"Fehler beim Laden von OHLCV für {symbol} ({market_type}): {e}", transaction_id)
+                send_message(f"Fehler beim Laden von OHLCV für {symbol} ({market_type}): {e}\n{traceback.format_exc()}")
                 continue
         return results
     

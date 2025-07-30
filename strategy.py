@@ -1,7 +1,10 @@
+
 import pandas as pd
 import yaml
 from typing import Any, Dict, Optional
 from data import DataFetcher
+import traceback
+from telegram import send_message
 
 # Log level constants
 LOG_DEBUG: str = 'DEBUG'
@@ -29,6 +32,7 @@ def get_strategy(config):
         with open('strategy_high_volatility_breakout_momentum.yaml', encoding="utf-8") as f:
             strategy_cfg = yaml.safe_load(f)
     except Exception as e:
+        send_message(f"Fehler beim Laden der Strategie-Konfiguration: {e}\n{traceback.format_exc()}")
         raise RuntimeError(f"Fehler beim Laden der Strategie-Konfiguration: {e}")
     return {
         'spot_long': SpotLongStrategy(strategy_cfg),

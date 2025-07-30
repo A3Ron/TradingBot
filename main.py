@@ -5,6 +5,7 @@ import time
 import re
 from dotenv import load_dotenv
 from data import DataFetcher
+from telegram import send_message
 from trader import SpotLongTrader, FuturesShortTrader
 from strategy import get_strategy
 
@@ -139,16 +140,7 @@ futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Trader Instanzen: {list(futures_traders.keys())}", str(uuid.uuid4()))
 
 startup_msg = format_startup_message(config)
-
-# Sende Startup-Message per Telegram, falls Token und Chat-ID vorhanden
-try:
-    if hasattr(data_fetcher, 'telegram_token') and hasattr(data_fetcher, 'telegram_chat_id'):
-        import requests
-        if data_fetcher.telegram_token and data_fetcher.telegram_chat_id:
-            url = f"https://api.telegram.org/bot{data_fetcher.telegram_token}/sendMessage"
-            requests.post(url, data={"chat_id": data_fetcher.telegram_chat_id, "text": startup_msg})
-except Exception:
-    pass
+send_message(startup_msg)
 
 # Lade offene Trades für alle Trader (Spot-Long und Futures-Short)
 for trader in spot_traders.values():
@@ -187,13 +179,4 @@ while True:
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f'Loop fertig', transaction_id)
     except Exception as e:
         data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Error: {e}", transaction_id)
-        # Telegram-Alert bei kritischen Fehlern im Main-Loop
-        try:
-            if hasattr(data_fetcher, 'telegram_token') and hasattr(data_fetcher, 'telegram_chat_id'):
-                import requests
-                if data_fetcher.telegram_token and data_fetcher.telegram_chat_id:
-                    url = f"https://api.telegram.org/bot{data_fetcher.telegram_token}/sendMessage"
-                    msg = f"[CRITICAL] Fehler im Main-Loop: {e}"
-                    requests.post(url, data={"chat_id": data_fetcher.telegram_chat_id, "text": msg})
-        except Exception:
-            pass
+        send_message(f"Error in main loop: {e}", transaction_id)
