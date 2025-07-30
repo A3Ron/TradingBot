@@ -369,6 +369,7 @@ class DataFetcher:
         """
         Speichert einen Trade in der Datenbank. transaction_id ist Pflicht. Generiert UUID falls nicht vorhanden.
         Speichert symbol_id statt symbol. Status und parent_trade_id werden korrekt gesetzt.
+        Stellt sicher, dass raw_order_data IMMER als JSON-String gesetzt ist (default '{}').
         """
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für save_trade")
@@ -426,9 +427,21 @@ class DataFetcher:
                         send_message(f"Profit-Konvertierung fehlgeschlagen: {e}\n{traceback.format_exc()}")
                         trade_data['profit_realized'] = 0.0
 
-            # raw_order_data als JSON-String speichern, falls dict
-            if 'raw_order_data' in trade_data and isinstance(trade_data['raw_order_data'], dict):
-                trade_data['raw_order_data'] = json.dumps(trade_data['raw_order_data'])
+            # raw_order_data: robustes, zentrales Setzen als JSON-String (default '{}')
+            rod = trade_data.get('raw_order_data', None)
+            if rod is None or rod == '':
+                trade_data['raw_order_data'] = '{}'
+            elif isinstance(rod, dict):
+                trade_data['raw_order_data'] = json.dumps(rod)
+            elif not isinstance(rod, str):
+                # Fallback: versuche zu serialisieren
+                try:
+                    trade_data['raw_order_data'] = json.dumps(rod)
+                except Exception as e:
+                    send_message(f"raw_order_data konnte nicht serialisiert werden: {e}\n{traceback.format_exc()}")
+                    trade_data['raw_order_data'] = '{}'
+
+            # extra als JSON-String speichern, falls dict
             if 'extra' in trade_data and isinstance(trade_data['extra'], dict):
                 trade_data['extra'] = json.dumps(trade_data['extra'])
 
