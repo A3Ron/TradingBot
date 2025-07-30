@@ -246,7 +246,7 @@ class BaseTrader:
                 transaction_id
             )
 
-    def close_trade(self, market_type: str, side: str, qty: float, price: float, exit_type: str, transaction_id: str) -> None:
+    def close_trade(self, market_type: str, trade_side: str, trade_volume: float, exit_price: float, exit_reason: str, transaction_id: str) -> None:
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für close_trade")
         parent_trade_id = None
@@ -254,83 +254,80 @@ class BaseTrader:
             parent_trade_id = self.open_trade['signal'].parent_trade_id
         if not parent_trade_id:
             parent_trade_id = str(uuid.uuid4())
-        # Baue extra analog zu open: Signal, Exit-Typ, ggf. Order-Info
-        extra_info = {
-            'exit_type': exit_type,
+        # Baue extra analog zu open: Signal, Exit-Reason, ggf. Order-Info
+        extra_information = {
+            'exit_reason': exit_reason,
             'transaction_id': transaction_id
         }
-        # Füge ggf. weitere Infos hinzu, z.B. entry, stop_loss, take_profit, falls vorhanden
+        # Füge ggf. weitere Infos hinzu, z.B. entry_price, stop_loss_price, take_profit_price, falls vorhanden
         if hasattr(self, 'open_trade') and self.open_trade:
             signal = self.open_trade.get('signal')
             if signal:
-                # Falls signal ein Objekt ist, in dict umwandeln
                 if not isinstance(signal, dict):
                     signal = {k: getattr(signal, k) for k in dir(signal) if not k.startswith('__') and not callable(getattr(signal, k))}
-                extra_info['signal'] = signal
-            # Füge ggf. Order-Info hinzu
+                extra_information['signal'] = signal
             if 'extra' in self.open_trade:
-                extra_info['open_extra'] = self.open_trade['extra']
-            if 'order_id' in self.open_trade:
-                extra_info['open_order_id'] = self.open_trade['order_id']
-        # Berechne Profit (USD):
+                extra_information['open_extra'] = self.open_trade['extra']
+            if 'order_identifier' in self.open_trade:
+                extra_information['open_order_identifier'] = self.open_trade['order_identifier']
+        # Berechne realisierten Profit (USD):
         entry_price = None
         if hasattr(self, 'open_trade') and self.open_trade:
             signal = self.open_trade.get('signal')
             if signal:
                 if isinstance(signal, dict):
-                    entry_price = signal.get('entry', None) or signal.get('price', None)
+                    entry_price = signal.get('entry_price', None) or signal.get('entry', None) or signal.get('price', None)
                 else:
-                    entry_price = getattr(signal, 'entry', None) or getattr(signal, 'price', None)
+                    entry_price = getattr(signal, 'entry_price', None) or getattr(signal, 'entry', None) or getattr(signal, 'price', None)
         if entry_price is not None and entry_price != 0:
-            if side == 'long':
-                profit = (price - entry_price) * qty
-            elif side == 'short':
-                profit = (entry_price - price) * qty
+            if trade_side == 'long':
+                profit_realized = (exit_price - entry_price) * trade_volume
+            elif trade_side == 'short':
+                profit_realized = (entry_price - exit_price) * trade_volume
             else:
-                profit = 0.0
+                profit_realized = 0.0
         else:
-            profit = 0.0
-        # Übernehme order_id aus open_trade, falls vorhanden
-        order_id = ''
+            profit_realized = 0.0
+        # Übernehme order_identifier aus open_trade, falls vorhanden
+        order_identifier = ''
         if hasattr(self, 'open_trade') and self.open_trade:
-            if 'order_id' in self.open_trade:
-                order_id = self.open_trade['order_id']
-        # Validierung und Logging für qty
-        if qty is None or qty == 0.0:
-            warn_msg = f"[WARN] close_trade wird mit qty={qty} aufgerufen! Symbol={self.symbol}, side={side}, price={price}, exit_type={exit_type}, transaction_id={transaction_id}"
-            self.data.save_log(LOG_WARN, 'trader', 'close_trade', warn_msg, transaction_id)
+            if 'order_identifier' in self.open_trade:
+                order_identifier = self.open_trade['order_identifier']
+        # Validierung und Logging für trade_volume
+        if trade_volume is None or trade_volume == 0.0:
+            warn_message = f"[WARN] close_trade wird mit trade_volume={trade_volume} aufgerufen! Symbol={self.symbol}, side={trade_side}, exit_price={exit_price}, exit_reason={exit_reason}, transaction_id={transaction_id}"
+            self.data.save_log(LOG_WARN, 'trader', 'close_trade', warn_message, transaction_id)
 
         # Fee aus open_trade übernehmen, falls vorhanden
-        fee = 0.0
+        fee_paid = 0.0
         if hasattr(self, 'open_trade') and self.open_trade:
-            if 'fee' in self.open_trade:
+            if 'fee_paid' in self.open_trade:
                 try:
-                    # Fee kann float, np.float, dict (mit 'cost') oder None sein
-                    open_fee = self.open_trade['fee']
+                    open_fee = self.open_trade['fee_paid']
                     if isinstance(open_fee, dict):
-                        fee = float(open_fee.get('cost', 0.0))
+                        fee_paid = float(open_fee.get('cost', 0.0))
                     elif open_fee is not None:
-                        fee = float(open_fee)
+                        fee_paid = float(open_fee)
                 except Exception:
-                    fee = 0.0
+                    fee_paid = 0.0
 
         trade_data = {
             'symbol': self.symbol,
             'market_type': market_type,
             'timestamp': pd.Timestamp.utcnow(),
-            'side': side,
-            'trade_volume': qty,
+            'side': trade_side,
+            'trade_volume': trade_volume,
             'entry_price': entry_price,
-            'fee_paid': fee,
-            'profit_realized': profit,
-            'order_identifier': order_id,
-            'extra': str(extra_info),
+            'fee_paid': fee_paid,
+            'profit_realized': profit_realized,
+            'order_identifier': order_identifier,
+            'extra': str(extra_information),
             'status': 'closed',
             'parent_trade_id': parent_trade_id,
-            'exit_reason': exit_type
+            'exit_reason': exit_reason
         }
         self.data.save_trade(trade_data, transaction_id)
-        self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_type}): {trade_data}", transaction_id)
+        self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_reason}): {trade_data}", transaction_id)
 
     def send_telegram(self, message: str, transaction_id: str = None) -> None:
         """
