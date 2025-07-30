@@ -250,10 +250,31 @@ class BaseTrader:
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für close_trade")
         parent_trade_id = None
-        if hasattr(self, 'open_trade') and self.open_trade and 'signal' in self.open_trade and hasattr(self.open_trade['signal'], 'parent_trade_id'):
-            parent_trade_id = self.open_trade['signal'].parent_trade_id
+        # Versuche Parent-Trade-ID aus Signal oder open_trade zu holen
+        if hasattr(self, 'open_trade') and self.open_trade:
+            signal = self.open_trade.get('signal')
+            # Falls signal ein Objekt ist, versuche Attribut
+            if signal:
+                if isinstance(signal, dict):
+                    parent_trade_id = signal.get('parent_trade_id')
+                else:
+                    parent_trade_id = getattr(signal, 'parent_trade_id', None)
+            # Fallback: direkt aus open_trade falls dort gespeichert
+            if not parent_trade_id:
+                parent_trade_id = self.open_trade.get('parent_trade_id')
+        # Wenn immer noch nicht vorhanden, neu generieren
         if not parent_trade_id:
             parent_trade_id = str(uuid.uuid4())
+        # Schreibe Parent-Trade-ID zurück ins Signal, falls sie dort fehlt
+        if hasattr(self, 'open_trade') and self.open_trade:
+            signal = self.open_trade.get('signal')
+            if signal:
+                if isinstance(signal, dict):
+                    if 'parent_trade_id' not in signal or not signal['parent_trade_id']:
+                        signal['parent_trade_id'] = parent_trade_id
+                else:
+                    if not hasattr(signal, 'parent_trade_id') or not getattr(signal, 'parent_trade_id', None):
+                        setattr(signal, 'parent_trade_id', parent_trade_id)
         # Baue extra analog zu open: Signal, Exit-Reason, ggf. Order-Info
         extra_information = {
             'exit_reason': exit_reason,
