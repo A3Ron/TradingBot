@@ -4,7 +4,7 @@ import yaml
 import time
 import re
 from dotenv import load_dotenv
-from data import DataFetcher
+from data import DataFetcher, filter_by_volume, get_volatility, MIN_VOLUME_USD, fetch_binance_tickers
 from telegram import send_message
 from trader import SpotLongTrader, FuturesShortTrader
 from strategy import get_strategy
@@ -19,6 +19,7 @@ LOG_ERROR = "ERROR"
 MAIN = "main"
 INIT = "init"
 MAIN_LOOP = "main_loop"
+TOP_N = 50  # z.B. Top 50 volatilste
 
 # --- Funktionen ---
 def format_startup_message(config):
@@ -37,6 +38,7 @@ def format_startup_message(config):
     stake_percent = strategy_cfg.get('stake_percent', '')
     futures = config['trading'].get('futures', '')
     params = strategy_cfg.get('params', {})
+    # Zeige die gefilterten Symbole (global definiert)
     msg = (
         f"TradingBot gestartet!\n"
         f"Modus: {config['execution'].get('mode', '')}\n"
@@ -47,6 +49,9 @@ def format_startup_message(config):
         f"Stake/Trade: {stake_percent}\n"
         f"Futures: {futures}\n"
         f"Max Trades/Tag: {config['execution'].get('max_trades_per_day', '')}\n"
+        f"--- Gefilterte Symbole ---\n"
+        f"Spot-Symbole ({len(spot_symbols)}): {', '.join(spot_symbols)}\n"
+        f"Futures-Symbole ({len(futures_symbols)}): {', '.join(futures_symbols)}\n"
         f"--- Strategie-Parameter ---\n"
         f"Stop-Loss %: {params.get('stop_loss_pct', '')}\n"
         f"Take-Profit %: {params.get('take_profit_pct', '')}\n"
@@ -102,9 +107,6 @@ except Exception as e:
         pass
     sys.exit(1)
 
-
-
-
 # Dynamisches Limit aus Strategie-Parametern (price_change_periods) nur einmalig auslesen
 price_change_periods = None
 try:
@@ -116,8 +118,23 @@ except Exception:
     price_change_periods = 20
 
 # Symbollisten für Spot (Long) und Futures (Short) aus der Datenbank (nur selected)
-spot_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="spot")]
-futures_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="futures")]
+
+# --- Symbol-Filter: Nur liquide und volatile Märkte ---
+# Hole alle Symbole
+spot_symbols_all = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="spot")]
+futures_symbols_all = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="futures")]
+
+# --- Symbol-Filter: Nur liquide und volatile Märkte ---
+tickers = fetch_binance_tickers()
+
+spot_symbols_liquid = filter_by_volume(spot_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
+futures_symbols_liquid = filter_by_volume(futures_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
+
+spot_symbols = sorted(spot_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
+futures_symbols = sorted(futures_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
+
+data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Spot-Symbole nach Volumen/Volatilität gefiltert: {spot_symbols}", str(uuid.uuid4()))
+data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Symbole nach Volumen/Volatilität gefiltert: {futures_symbols}", str(uuid.uuid4()))
 
 # Strategie-Instanzen für beide Typen
 strategies = get_strategy(config)

@@ -583,19 +583,27 @@ class SpotLongTrader(BaseTrader):
         current_price = df['close'].iloc[-1]
         base_asset = self.symbol.split('/')[0]
         min_qty = 0.0
+        # --- Debug: Symbol-Info und minQty ---
         try:
             symbol_info = self.exchange.market(self.symbol)
             min_qty = float(symbol_info.get('limits', {}).get('amount', {}).get('min', 0.0))
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Symbol-Info: {symbol_info}", transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] minQty aus Symbol-Info: {min_qty}", transaction_id)
         except Exception as e:
             self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', f"[{self.symbol}] Fehler beim Holen von minQty: {e}", transaction_id)
             min_qty = 0.0
+        # --- Debug: Balance ---
         try:
             balance = self.exchange.fetch_balance()
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] fetch_balance: {balance}", transaction_id)
             available = balance[base_asset]['free'] if base_asset in balance else trade.volume
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] base_asset: {base_asset}, available: {available}", transaction_id)
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"[{self.symbol}] Fehler beim Abfragen des Balances: {e}", transaction_id)
             available = trade.volume
+        # --- Debug: Volumenberechnung ---
         volume_to_sell = self.round_volume_to_step(available)
+        self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] round_volume_to_step({available}) = {volume_to_sell}", transaction_id)
         self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[{self.symbol}] Aktuelles Volumen: {volume_to_sell}, minQty: {min_qty}, Preis: {current_price}", transaction_id)
         if volume_to_sell < min_qty or volume_to_sell == 0.0:
             entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
@@ -889,16 +897,24 @@ class FuturesShortTrader(BaseTrader):
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für monitor_trade")
         current_price = df['close'].iloc[-1]
+        # --- Debug: Symbol-Info ---
+        try:
+            symbol_info = self.exchange.market(self.symbol)
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Symbol-Info: {symbol_info}", transaction_id)
+        except Exception as e:
+            self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', f"[{self.symbol}] Fehler beim Holen von Symbol-Info: {e}", transaction_id)
         # Hole aktuelle offene Short-Positionsgröße
         position_amt = trade.volume
+        # --- Debug: Positionen ---
         try:
             positions = self.exchange.fetch_positions([self.symbol])
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] fetch_positions: {positions}", transaction_id)
             found = False
             for pos in positions:
+                self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Position: {pos}", transaction_id)
                 if pos.get('symbol') == self.symbol and pos.get('side', '').lower() == 'short':
                     contracts = pos.get('contracts', None)
                     position_amt_field = pos.get('positionAmt', None)
-                    self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"Position-Objekt: {pos}", transaction_id)
                     if contracts is not None and position_amt_field is not None:
                         amt = abs(float(contracts)) if abs(float(contracts)) > 0 else abs(float(position_amt_field))
                     elif contracts is not None:
@@ -906,12 +922,12 @@ class FuturesShortTrader(BaseTrader):
                     elif position_amt_field is not None:
                         amt = abs(float(position_amt_field))
                     else:
-                        # Fehlerhafter Positions-Objekt, Trade schließen
                         self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Weder 'contracts' noch 'positionAmt' im Positionsobjekt vorhanden: {pos}", transaction_id)
                         self.close_trade('futures', 'short', 0.0, current_price, 'error_position_fields_missing', transaction_id)
                         return 'error_position_fields_missing'
                     if amt > 0:
                         position_amt = amt
+                        self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Short-Position gefunden: {position_amt}", transaction_id)
                         found = True
             if not found:
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Keine offene Short-Position für {self.symbol} gefunden! Positionen: {positions}", transaction_id)
@@ -921,6 +937,8 @@ class FuturesShortTrader(BaseTrader):
             self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Abfragen der offenen Short-Position: {e}", transaction_id)
             self.close_trade('futures', 'short', 0.0, current_price, 'error_position_fetch', transaction_id)
             return 'error_position_fetch'
+        # --- Debug: Volumenberechnung ---
+        self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] position_amt (zu verkaufen): {position_amt}", transaction_id)
         # Take-Profit Exit
         if current_price <= trade.take_profit:
             entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0

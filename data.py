@@ -89,6 +89,34 @@ def create_tables(engine):
 
 create_tables(pg_engine)
 
+# --- Symbol-Filter-Utilities ---
+# Mindestvolumen-Filter (z.B. 1 Mio USD)
+MIN_VOLUME_USD = 1_000_000
+def filter_by_volume(symbols, tickers, min_volume_usd=MIN_VOLUME_USD):
+    """Filtert Symbole nach Mindestvolumen in USD (24h)."""
+    filtered = []
+    for s in symbols:
+        t = tickers.get(s)
+        if t and t.get('quoteVolume', 0) and t['quoteVolume'] * t.get('last', 0) > min_volume_usd:
+            filtered.append(s)
+    return filtered
+
+def get_volatility(symbol, tickers=None):
+    """Berechnet die absolute 24h-Preisänderung in Prozent für ein Symbol."""
+    if tickers is not None:
+        t = tickers.get(symbol)
+        if t and t.get('percentage') is not None:
+            return abs(t['percentage'])
+        return 0
+    # fallback falls nur symbol übergeben
+    return 0
+
+# --- Binance Ticker Utility ---
+def fetch_binance_tickers():
+    """Lädt alle 24h-Ticker von Binance via ccxt."""
+    binance = ccxt.binance()
+    return binance.fetch_tickers()
+
 class DataFetcher:
     """ Lädt und speichert Marktdaten, Symbole und Trades in der Datenbank."""
 
