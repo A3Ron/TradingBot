@@ -4,7 +4,9 @@ import pandas as pd
 import traceback
 from typing import Optional, Dict, Any
 from data import DataFetcher
+from telegram import send_message
 import uuid
+
 
 # Magic constants
 SPOT = 'spot'
@@ -178,7 +180,7 @@ class BaseTrader:
         exit_type = self.monitor_trade(signal, df, strategy, transaction_id)
         if exit_type:
             self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_open_trade', f"[MAIN] {market_type.capitalize()}-{side.capitalize()}-Trade für {symbol} geschlossen: {exit_type}", transaction_id)
-            self.send_telegram(f"{market_type.capitalize()}-{side.capitalize()}-Trade für {symbol} geschlossen: {exit_type}")
+            send_message(f"{market_type.capitalize()}-{side.capitalize()}-Trade für {symbol} geschlossen: {exit_type}")
             self.open_trade = None
             return exit_type
         else:
@@ -228,7 +230,7 @@ class BaseTrader:
             result = execute_trade_method(signal, transaction_id)
             self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[MAIN] {market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol}: {result}", transaction_id)
             if result:
-                self.send_telegram(
+                send_message(
                     f"{market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol} "
                     f"Entry: {getattr(signal, 'entry', None)} SL: {getattr(signal, 'stop_loss', None)} "
                     f"TP: {getattr(signal, 'take_profit', None)} Vol: {getattr(signal, 'volume', None)}",
@@ -378,20 +380,6 @@ class BaseTrader:
         self.data.save_trade(trade_data, transaction_id)
         self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_reason}): {trade_data}", transaction_id)
 
-    def send_telegram(self, message: str, transaction_id: str = None) -> None:
-        """
-        Sendet eine Telegram-Nachricht, falls Token und Chat-ID gesetzt sind.
-        """
-        if not self.telegram_token or not self.telegram_chat_id:
-            return
-        import requests
-        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-        data = {"chat_id": self.telegram_chat_id, "text": message}
-        try:
-            requests.post(url, data=data)
-        except Exception as e:
-            self.data.save_log(LOG_WARN, 'trader', 'send_telegram', f"Telegram error: {e}\n{traceback.format_exc()}", transaction_id or str(uuid.uuid4()))
-
     def get_trade_volume(self, signal: Any, transaction_id: str = None) -> float:
         """
         Berechnet das Handelsvolumen so, dass pro Trade maximal den in der Strategy-Config angegebenen stake_percent und risk_percent verwendet werden.
@@ -527,7 +515,7 @@ class SpotLongTrader(BaseTrader):
         parent_trade_id = str(uuid.uuid4())
         if self.mode == 'testnet':
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
-            self.send_telegram(f"[TESTNET] {msg}")
+            send_message(f"[TESTNET] {msg}")
             trade_data = {
                 'symbol': self.symbol,
                 'market_type': 'testnet',
@@ -562,7 +550,7 @@ class SpotLongTrader(BaseTrader):
                 self.symbol, 'MARKET', 'BUY', None, None, {'quoteOrderQty': quote_qty}
             )
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Order ausgeführt: {order}", transaction_id)
-            self.send_telegram(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
+            send_message(f"LONG Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             trade_data = {
                 'symbol': self.symbol,
                 'market_type': 'spot',
@@ -586,7 +574,7 @@ class SpotLongTrader(BaseTrader):
             return order
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'execute_trade', f"Trade fehlgeschlagen: {e}", transaction_id)
-            self.send_telegram(f"LONG Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
+            send_message(f"LONG Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
     def monitor_trade(self, trade, df, strategy, transaction_id):
@@ -619,7 +607,7 @@ class SpotLongTrader(BaseTrader):
             msg = (f"[SPOT-LONG EXIT] {self.symbol} | Grund: Volumen zu klein | Vol: {volume_to_sell} < minQty: {min_qty} | Preis: {current_price} | "
                    f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Order-ID: {order_id} | Fee: {fee} | Exit: volume_too_small | Trade wird als geschlossen markiert.")
             self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
-            self.send_telegram(msg)
+            send_message(msg)
             self.close_trade('spot', 'long', volume_to_sell, current_price, 'volume_too_small', transaction_id)
             return "volume_too_small"
         # Take-Profit Exit
@@ -634,7 +622,7 @@ class SpotLongTrader(BaseTrader):
             msg = (f"[SPOT-LONG EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} >= TP: {trade.take_profit} | Vol: {volume_to_sell} | "
                    f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Order-ID: {order_id} | Fee: {fee} | Profit: {profit:.2f} | Exit: take_profit")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
-            self.send_telegram(msg)
+            send_message(msg)
             try:
                 order = self.exchange.create_order(
                     self.symbol, 'MARKET', 'SELL', volume_to_sell
@@ -645,7 +633,7 @@ class SpotLongTrader(BaseTrader):
             except Exception as e:
                 err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Take-Profit SELL: {e} | Vol: {volume_to_sell} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
-                self.send_telegram(err_msg)
+                send_message(err_msg)
                 return None
         # Stop-Loss Exit
         if current_price <= trade.stop_loss:
@@ -659,7 +647,7 @@ class SpotLongTrader(BaseTrader):
             msg = (f"[SPOT-LONG EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} <= SL: {trade.stop_loss} | Vol: {volume_to_sell} | "
                    f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Order-ID: {order_id} | Fee: {fee} | Profit: {profit:.2f} | Exit: stop_loss")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
-            self.send_telegram(msg)
+            send_message(msg)
             try:
                 order = self.exchange.create_order(
                     self.symbol, 'MARKET', 'SELL', volume_to_sell
@@ -670,7 +658,7 @@ class SpotLongTrader(BaseTrader):
             except Exception as e:
                 err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Stop-Loss SELL: {e} | Vol: {volume_to_sell} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
-                self.send_telegram(err_msg)
+                send_message(err_msg)
                 return None
         # Momentum-Exit (step-by-step debug)
         if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
@@ -704,7 +692,7 @@ class SpotLongTrader(BaseTrader):
                 msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | Volumen zu klein | Vol: {available} < minQty: {min_qty_check} | Preis: {current_price} | "
                        f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Trade wird als geschlossen markiert.")
                 self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
-                self.send_telegram(msg)
+                send_message(msg)
                 self.close_trade('spot', 'long', available, current_price, 'momentum_exit_volume_too_small', transaction_id)
                 return "momentum_exit_volume_too_small"
             # Step 4: Try to close position
@@ -718,7 +706,7 @@ class SpotLongTrader(BaseTrader):
             except Exception as e:
                 err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Momentum-Exit SELL: {e} | Vol: {available} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
-                self.send_telegram(err_msg)
+                send_message(err_msg, transaction_id)
                 # Step 5: Log error and do not mark as closed
                 return None
         # Trailing-Stop
@@ -728,7 +716,7 @@ class SpotLongTrader(BaseTrader):
                 old_sl = trade.stop_loss
                 trade.stop_loss = trailing_stop
                 self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"[{self.symbol}] Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}", transaction_id)
-                self.send_telegram(f"[{self.symbol}] Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+                send_message(f"[{self.symbol}] Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
         return None
 
 class FuturesShortTrader(BaseTrader):
@@ -818,7 +806,7 @@ class FuturesShortTrader(BaseTrader):
         parent_trade_id = str(uuid.uuid4())
         if self.mode == 'testnet':
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"[TESTNET] {msg}", transaction_id)
-            self.send_telegram(f"[TESTNET] {msg}")
+            send_message(f"[TESTNET] {msg}")
             trade_data = {
                 'symbol': self.symbol,
                 'market_type': 'testnet',
@@ -848,7 +836,7 @@ class FuturesShortTrader(BaseTrader):
                 params={"reduceOnly": False}
             )
             self.data.save_log(LOG_INFO, 'trader', 'execute_trade', f"Short-Order ausgeführt: {order}", transaction_id)
-            self.send_telegram(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
+            send_message(f"SHORT Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
             signal.volume = order.get('amount', volume)
             # --- Fee Extraction Robust ---
             fee_paid = 0.0
@@ -894,7 +882,7 @@ class FuturesShortTrader(BaseTrader):
             return order
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'execute_trade', f"Short-Trade fehlgeschlagen: {e}", transaction_id)
-            self.send_telegram(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
+            send_message(f"SHORT Trade failed: {self.symbol} @ {signal.entry} Vol: {volume}\nError: {e}")
             return None
 
     def monitor_trade(self, trade, df, strategy, transaction_id):
@@ -942,13 +930,13 @@ class FuturesShortTrader(BaseTrader):
             msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} <= TP: {trade.take_profit} | PosAmt: {position_amt} | "
                    f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
-            self.send_telegram(msg)
+            send_message(msg)
             try:
                 self.exchange.create_market_buy_order(self.symbol, position_amt, params={"reduceOnly": True})
             except Exception as e:
-                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Take-Profit BUY: {e} | PosAmt: {position_amt} | Preis: {current_price}")
+                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Take-Profit BUY: {e} | PosAmt: {position_amt} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
-                self.send_telegram(err_msg)
+                send_message(err_msg, transaction_id)
                 self.close_trade('futures', 'short', position_amt, current_price, 'error_order_exec', transaction_id)
                 return 'error_order_exec'
             self.close_trade('futures', 'short', position_amt, current_price, 'take_profit', transaction_id)
@@ -961,13 +949,13 @@ class FuturesShortTrader(BaseTrader):
             msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} >= SL: {trade.stop_loss} | PosAmt: {position_amt} | "
                    f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
-            self.send_telegram(msg)
+            send_message(msg)
             try:
                 self.exchange.create_market_buy_order(self.symbol, position_amt, params={"reduceOnly": True})
             except Exception as e:
-                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Stop-Loss BUY: {e} | PosAmt: {position_amt} | Preis: {current_price}")
+                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Stop-Loss BUY: {e} | PosAmt: {position_amt} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
-                self.send_telegram(err_msg)
+                send_message(err_msg, transaction_id)
                 self.close_trade('futures', 'short', position_amt, current_price, 'error_order_exec', transaction_id)
                 return 'error_order_exec'
             self.close_trade('futures', 'short', position_amt, current_price, 'stop_loss', transaction_id)
@@ -1004,7 +992,7 @@ class FuturesShortTrader(BaseTrader):
                 msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | Keine offene Short-Position zum Schließen | Preis: {current_price} | "
                        f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Trade wird als geschlossen markiert.")
                 self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
-                self.send_telegram(msg)
+                send_message(msg)
                 self.close_trade('futures', 'short', 0.0, current_price, 'momentum_exit_no_position', transaction_id)
                 return "momentum_exit_no_position"
             # Step 3: Try to close position
@@ -1014,9 +1002,9 @@ class FuturesShortTrader(BaseTrader):
                 self.close_trade('futures', 'short', position_amt_check, current_price, 'momentum_exit', transaction_id)
                 return "momentum_exit"
             except Exception as e:
-                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Momentum-Exit BUY: {e} | PosAmt: {position_amt_check} | Preis: {current_price}")
+                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Momentum-Exit BUY: {e} | PosAmt: {position_amt_check} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
-                self.send_telegram(err_msg)
+                send_message(err_msg, transaction_id)
                 # Step 4: Log error and do not mark as closed
                 return None
         if hasattr(strategy, 'get_trailing_stop'):
@@ -1025,5 +1013,5 @@ class FuturesShortTrader(BaseTrader):
                 old_sl = trade.stop_loss
                 trade.stop_loss = trailing_stop
                 self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}", transaction_id)
-                self.send_telegram(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+                send_message(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
         return None
