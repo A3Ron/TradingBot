@@ -401,59 +401,105 @@ class SpotLongTrader(BaseTrader):
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für monitor_trade")
         current_price = df['close'].iloc[-1]
-        # Hole verfügbares Asset-Volumen
         base_asset = self.symbol.split('/')[0]
+        min_qty = 0.0
+        try:
+            symbol_info = self.exchange.market(self.symbol)
+            min_qty = float(symbol_info.get('limits', {}).get('amount', {}).get('min', 0.0))
+        except Exception as e:
+            self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', f"[{self.symbol}] Fehler beim Holen von minQty: {e}", transaction_id)
+            min_qty = 0.0
         try:
             balance = self.exchange.fetch_balance()
             available = balance[base_asset]['free'] if base_asset in balance else trade.volume
         except Exception as e:
-            self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Abfragen des Balances: {e}", transaction_id)
+            self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"[{self.symbol}] Fehler beim Abfragen des Balances: {e}", transaction_id)
             available = trade.volume
-        volume_to_sell = available
+        volume_to_sell = round(available, 6)
+        self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[{self.symbol}] Aktuelles Volumen: {volume_to_sell}, minQty: {min_qty}, Preis: {current_price}", transaction_id)
+        if volume_to_sell < min_qty or volume_to_sell == 0.0:
+            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Grund: Volumen zu klein | Vol: {volume_to_sell} < minQty: {min_qty} | Preis: {current_price} | "
+                   f"Trade wird als geschlossen markiert.")
+            self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
+            self.send_telegram(msg)
+            self.close_trade('spot', 'long', volume_to_sell, current_price, 'volume_too_small', transaction_id)
+            return "volume_too_small"
         # Take-Profit Exit
         if current_price >= trade.take_profit:
-            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Take-Profit erreicht: {current_price} >= {trade.take_profit}", transaction_id)
-            self.send_telegram(f"Take-Profit erreicht: {current_price} >= {trade.take_profit}")
+            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} >= TP: {trade.take_profit} | Vol: {volume_to_sell}")
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
+            self.send_telegram(msg)
             try:
                 order = self.exchange.create_order(
                     self.symbol, 'MARKET', 'SELL', volume_to_sell
                 )
-                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Take-Profit SELL ausgeführt: {order}", transaction_id)
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"[SPOT-LONG EXIT] {self.symbol} | Take-Profit SELL ausgeführt | Order: {order}", transaction_id)
                 self.close_trade('spot', 'long', volume_to_sell, current_price, 'take_profit', transaction_id)
                 return "take_profit"
             except Exception as e:
-                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Take-Profit SELL: {e}", transaction_id)
-                self.send_telegram(f"Fehler beim Take-Profit SELL: {e}")
+                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Take-Profit SELL: {e} | Vol: {volume_to_sell} | Preis: {current_price}")
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
+                self.send_telegram(err_msg)
                 return None
         # Stop-Loss Exit
         if current_price <= trade.stop_loss:
-            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}", transaction_id)
-            self.send_telegram(f"Stop-Loss erreicht: {current_price} <= {trade.stop_loss}")
+            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} <= SL: {trade.stop_loss} | Vol: {volume_to_sell}")
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
+            self.send_telegram(msg)
             try:
                 order = self.exchange.create_order(
                     self.symbol, 'MARKET', 'SELL', volume_to_sell
                 )
-                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Stop-Loss SELL ausgeführt: {order}", transaction_id)
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"[SPOT-LONG EXIT] {self.symbol} | Stop-Loss SELL ausgeführt | Order: {order}", transaction_id)
                 self.close_trade('spot', 'long', volume_to_sell, current_price, 'stop_loss', transaction_id)
                 return "stop_loss"
             except Exception as e:
-                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Stop-Loss SELL: {e}", transaction_id)
-                self.send_telegram(f"Fehler beim Stop-Loss SELL: {e}")
+                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Stop-Loss SELL: {e} | Vol: {volume_to_sell} | Preis: {current_price}")
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
+                self.send_telegram(err_msg)
                 return None
-        # Momentum-Exit
+        # Momentum-Exit (step-by-step debug)
         if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
-            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}", transaction_id)
-            self.send_telegram(f"Momentum-Exit: RSI < {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | RSI < {getattr(strategy, 'momentum_exit_rsi', 50)} | Vol: {volume_to_sell} | Preis: {current_price}")
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Momentum-Exit: Symbol={self.symbol}, VolToSell={volume_to_sell}, minQty={min_qty}, Price={current_price}", transaction_id)
+            # Step 1: Check available balance again
+            try:
+                balance = self.exchange.fetch_balance()
+                available = balance[base_asset]['free'] if base_asset in balance else 0.0
+                self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step1: Fetched balance for {base_asset}: {available}", transaction_id)
+            except Exception as e:
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"[DEBUG] Step1: Fehler beim Balance-Check: {e}", transaction_id)
+                available = volume_to_sell
+            # Step 2: Check minQty again
+            try:
+                symbol_info = self.exchange.market(self.symbol)
+                min_qty_check = float(symbol_info.get('limits', {}).get('amount', {}).get('min', 0.0))
+                self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step2: minQty erneut geprüft: {min_qty_check}", transaction_id)
+            except Exception as e:
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"[DEBUG] Step2: Fehler beim minQty-Check: {e}", transaction_id)
+                min_qty_check = min_qty
+            # Step 3: Log all relevant context before order
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step3: Momentum-Exit Order-Context: Symbol={self.symbol}, VolToSell={available}, minQty={min_qty_check}, Price={current_price}", transaction_id)
+            if available < min_qty_check or available == 0.0:
+                msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | Volumen zu klein | Vol: {available} < minQty: {min_qty_check} | Preis: {current_price} | Trade wird als geschlossen markiert.")
+                self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
+                self.send_telegram(msg)
+                self.close_trade('spot', 'long', available, current_price, 'momentum_exit_volume_too_small', transaction_id)
+                return "momentum_exit_volume_too_small"
+            # Step 4: Try to close position
             try:
                 order = self.exchange.create_order(
-                    self.symbol, 'MARKET', 'SELL', volume_to_sell
+                    self.symbol, 'MARKET', 'SELL', available
                 )
-                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Momentum-Exit SELL ausgeführt: {order}", transaction_id)
-                self.close_trade('spot', 'long', volume_to_sell, current_price, 'momentum_exit', transaction_id)
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit SELL ausgeführt | Order: {order}", transaction_id)
+                self.close_trade('spot', 'long', available, current_price, 'momentum_exit', transaction_id)
                 return "momentum_exit"
             except Exception as e:
-                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Momentum-Exit SELL: {e}", transaction_id)
-                self.send_telegram(f"Fehler beim Momentum-Exit SELL: {e}")
+                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Momentum-Exit SELL: {e} | Vol: {available} | Preis: {current_price}")
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
+                self.send_telegram(err_msg)
+                # Step 5: Log error and do not mark as closed
                 return None
         # Trailing-Stop
         if hasattr(strategy, 'get_trailing_stop'):
@@ -461,8 +507,8 @@ class SpotLongTrader(BaseTrader):
             if trailing_stop is not None and current_price > trade.entry:
                 old_sl = trade.stop_loss
                 trade.stop_loss = trailing_stop
-                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}", transaction_id)
-                self.send_telegram(f"Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"[{self.symbol}] Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}", transaction_id)
+                self.send_telegram(f"[{self.symbol}] Trailing-Stop aktiviert: SL von {old_sl} auf {trade.stop_loss}")
         return None
 
 class FuturesShortTrader(BaseTrader):
@@ -621,32 +667,70 @@ class FuturesShortTrader(BaseTrader):
             self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Abfragen der offenen Short-Position: {e}", transaction_id)
         # Take-Profit Exit
         if current_price <= trade.take_profit:
-            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Take-Profit erreicht: {current_price} <= {trade.take_profit}", transaction_id)
-            self.send_telegram(f"Take-Profit erreicht: {current_price} <= {trade.take_profit}")
+            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} <= TP: {trade.take_profit} | PosAmt: {position_amt}")
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
+            self.send_telegram(msg)
             try:
                 self.exchange.create_market_buy_order(self.symbol, position_amt, params={"reduceOnly": True})
             except Exception as e:
-                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Error closing short position: {e}", transaction_id)
+                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Take-Profit BUY: {e} | PosAmt: {position_amt} | Preis: {current_price}")
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
+                self.send_telegram(err_msg)
             self.close_trade('futures', 'short', position_amt, current_price, 'take_profit', transaction_id)
             return "take_profit"
         if current_price >= trade.stop_loss:
-            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}", transaction_id)
-            self.send_telegram(f"Stop-Loss erreicht: {current_price} >= {trade.stop_loss}")
+            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} >= SL: {trade.stop_loss} | PosAmt: {position_amt}")
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
+            self.send_telegram(msg)
             try:
                 self.exchange.create_market_buy_order(self.symbol, position_amt, params={"reduceOnly": True})
             except Exception as e:
-                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Error closing short position: {e}", transaction_id)
+                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Stop-Loss BUY: {e} | PosAmt: {position_amt} | Preis: {current_price}")
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
+                self.send_telegram(err_msg)
             self.close_trade('futures', 'short', position_amt, current_price, 'stop_loss', transaction_id)
             return "stop_loss"
+        # Momentum-Exit (step-by-step debug)
         if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
-            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}", transaction_id)
-            self.send_telegram(f"Momentum-Exit: RSI > {getattr(strategy, 'momentum_exit_rsi', 50)}")
+            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | RSI > {getattr(strategy, 'momentum_exit_rsi', 50)} | PosAmt: {position_amt} | Preis: {current_price}")
+            self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Momentum-Exit: Symbol={self.symbol}, PosAmt={position_amt}, Price={current_price}", transaction_id)
+            # Step 1: Check open position again
             try:
-                self.exchange.create_market_buy_order(self.symbol, position_amt, params={"reduceOnly": True})
+                positions = self.exchange.fetch_positions([self.symbol])
+                amt = None
+                for pos in positions:
+                    if pos.get('symbol') == self.symbol and pos.get('side', '').lower() == 'short':
+                        amt = abs(float(pos.get('contracts', pos.get('positionAmt', 0))))
+                        break
+                if amt is not None:
+                    position_amt_check = amt
+                else:
+                    position_amt_check = position_amt
+                self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step1: Fetched open short position: {position_amt_check}", transaction_id)
             except Exception as e:
-                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Error closing short on momentum exit: {e}", transaction_id)
-            self.close_trade('futures', 'short', position_amt, current_price, 'momentum_exit', transaction_id)
-            return "momentum_exit"
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"[DEBUG] Step1: Fehler beim Positions-Check: {e}", transaction_id)
+                position_amt_check = position_amt
+            # Step 2: Log all relevant context before order
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step2: Momentum-Exit Order-Context: Symbol={self.symbol}, PosAmt={position_amt_check}, Price={current_price}", transaction_id)
+            if position_amt_check == 0.0:
+                msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | Keine offene Short-Position zum Schließen | Preis: {current_price} | Trade wird als geschlossen markiert.")
+                self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
+                self.send_telegram(msg)
+                self.close_trade('futures', 'short', 0.0, current_price, 'momentum_exit_no_position', transaction_id)
+                return "momentum_exit_no_position"
+            # Step 3: Try to close position
+            try:
+                self.exchange.create_market_buy_order(self.symbol, position_amt_check, params={"reduceOnly": True})
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit BUY (close short) ausgeführt | PosAmt: {position_amt_check}", transaction_id)
+                self.close_trade('futures', 'short', position_amt_check, current_price, 'momentum_exit', transaction_id)
+                return "momentum_exit"
+            except Exception as e:
+                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Momentum-Exit BUY: {e} | PosAmt: {position_amt_check} | Preis: {current_price}")
+                self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
+                self.send_telegram(err_msg)
+                # Step 4: Log error and do not mark as closed
+                return None
         if hasattr(strategy, 'get_trailing_stop'):
             trailing_stop = strategy.get_trailing_stop(trade.entry, current_price)
             if trailing_stop is not None and current_price < trade.entry:
