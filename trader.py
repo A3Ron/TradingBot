@@ -24,7 +24,7 @@ class BaseTrader:
     """
     Basisklasse für Trader-Logik (Spot/Futures). Verwaltet Symbol, Konfiguration, Exchange, Logging und Telegram.
     """
-        
+
     def round_volume_to_step(self, volume: float) -> float:
         """
         Rundet das Volumen dynamisch nach Exchange-Spezifikation (stepSize/amount precision).
@@ -565,8 +565,10 @@ class SpotLongTrader(BaseTrader):
             notional = volume_to_sell * entry_price
             pnl_pct = 0.0
             pnl_usd = 0.0
+            order_id = getattr(trade, 'order_id', None) or getattr(self.open_trade, 'order_id', None) or ''
+            fee = getattr(trade, 'fee', None) or getattr(self.open_trade, 'fee', None) or 0.0
             msg = (f"[SPOT-LONG EXIT] {self.symbol} | Grund: Volumen zu klein | Vol: {volume_to_sell} < minQty: {min_qty} | Preis: {current_price} | "
-                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Trade wird als geschlossen markiert.")
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Order-ID: {order_id} | Fee: {fee} | Exit: volume_too_small | Trade wird als geschlossen markiert.")
             self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
             self.send_telegram(msg)
             self.close_trade('spot', 'long', volume_to_sell, current_price, 'volume_too_small', transaction_id)
@@ -577,8 +579,11 @@ class SpotLongTrader(BaseTrader):
             notional = volume_to_sell * entry_price
             pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
             pnl_usd = (current_price - entry_price) * volume_to_sell if entry_price else 0.0
+            order_id = getattr(trade, 'order_id', None) or getattr(self.open_trade, 'order_id', None) or ''
+            fee = getattr(trade, 'fee', None) or getattr(self.open_trade, 'fee', None) or 0.0
+            profit = pnl_usd
             msg = (f"[SPOT-LONG EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} >= TP: {trade.take_profit} | Vol: {volume_to_sell} | "
-                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Order-ID: {order_id} | Fee: {fee} | Profit: {profit:.2f} | Exit: take_profit")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
             self.send_telegram(msg)
             try:
@@ -599,8 +604,11 @@ class SpotLongTrader(BaseTrader):
             notional = volume_to_sell * entry_price
             pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
             pnl_usd = (current_price - entry_price) * volume_to_sell if entry_price else 0.0
+            order_id = getattr(trade, 'order_id', None) or getattr(self.open_trade, 'order_id', None) or ''
+            fee = getattr(trade, 'fee', None) or getattr(self.open_trade, 'fee', None) or 0.0
+            profit = pnl_usd
             msg = (f"[SPOT-LONG EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} <= SL: {trade.stop_loss} | Vol: {volume_to_sell} | "
-                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Order-ID: {order_id} | Fee: {fee} | Profit: {profit:.2f} | Exit: stop_loss")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
             self.send_telegram(msg)
             try:
