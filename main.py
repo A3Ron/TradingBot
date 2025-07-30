@@ -131,6 +131,7 @@ try:
 except Exception:
     strategy_cfg = {}
 
+
 # Trader-Instanzen pro Symbol und Typ, strategy_cfg wird übergeben
 spot_traders = {symbol: SpotLongTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in spot_symbols}
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Spot-Trader Instanzen: {list(spot_traders.keys())}", str(uuid.uuid4()))
@@ -138,6 +139,16 @@ futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_
 data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Trader Instanzen: {list(futures_traders.keys())}", str(uuid.uuid4()))
 
 startup_msg = format_startup_message(config)
+
+# Sende Startup-Message per Telegram, falls Token und Chat-ID vorhanden
+try:
+    if hasattr(data_fetcher, 'telegram_token') and hasattr(data_fetcher, 'telegram_chat_id'):
+        import requests
+        if data_fetcher.telegram_token and data_fetcher.telegram_chat_id:
+            url = f"https://api.telegram.org/bot{data_fetcher.telegram_token}/sendMessage"
+            requests.post(url, data={"chat_id": data_fetcher.telegram_chat_id, "text": startup_msg})
+except Exception:
+    pass
 
 # Lade offene Trades für alle Trader (Spot-Long und Futures-Short)
 for trader in spot_traders.values():
