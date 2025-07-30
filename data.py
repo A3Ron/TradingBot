@@ -16,7 +16,6 @@ import uuid
 import json
 import numpy as np
 
-
 load_dotenv()
 
 # --- DB Setup ---
@@ -45,11 +44,16 @@ def create_tables(engine):
         Column('timestamp', DateTime, index=True),
         Column('side', String(8)),
         Column('status', String(20)),
-        Column('qty', Float),
-        Column('price', Float),
-        Column('fee', Float),
-        Column('profit', Float),
-        Column('order_id', String(64)),
+        Column('trade_volume', Float),
+        Column('entry_price', Float),
+        Column('stop_loss_price', Float),
+        Column('take_profit_price', Float),
+        Column('signal_volume', Float),
+        Column('exit_reason', String(64)),
+        Column('order_identifier', String(64)),
+        Column('fee_paid', Float),
+        Column('profit_realized', Float),
+        Column('raw_order_data', Text),
         Column('extra', Text)
     )
     Table('symbols', meta,
@@ -355,69 +359,86 @@ class DataFetcher:
         """Erstellt eine neue Datenbank-Session."""
         return Session()
     
-    def save_trade(self, trade_dict: dict, transaction_id: str) -> None:
-        """Speichert einen Trade in der Datenbank. transaction_id ist Pflicht. Generiert UUID falls nicht vorhanden. Speichert symbol_id statt symbol. Status und parent_trade_id werden korrekt gesetzt."""
+    def save_trade(self, trade_data: dict, transaction_id: str) -> None:
+        """
+        Speichert einen Trade in der Datenbank. transaction_id ist Pflicht. Generiert UUID falls nicht vorhanden.
+        Speichert symbol_id statt symbol. Status und parent_trade_id werden korrekt gesetzt.
+        """
         if not transaction_id:
             raise ValueError("transaction_id ist Pflicht für save_trade")
         session = self.get_session()
         try:
-            if 'id' not in trade_dict or not trade_dict['id']:
-                trade_dict['id'] = str(uuid.uuid4())
-            trade_dict['transaction_id'] = transaction_id
+            # ID generieren, falls nicht vorhanden
+            if 'id' not in trade_data or not trade_data['id']:
+                trade_data['id'] = str(uuid.uuid4())
+            trade_data['transaction_id'] = transaction_id
+
             # symbol_id aus symbols-Tabelle holen
-            symbol = trade_dict.get('symbol')
+            symbol = trade_data.get('symbol')
             if not symbol:
-                raise ValueError("symbol muss im trade_dict vorhanden sein!")
+                raise ValueError("symbol muss im trade_data vorhanden sein!")
             sym_table = self.get_symbols_table()
             res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol)).fetchone()
             if not res:
                 raise ValueError(f"Symbol {symbol} nicht in symbols-Tabelle gefunden!")
-            trade_dict['symbol_id'] = res.id
-            # symbol-String aus dict entfernen, falls vorhanden
-            if 'symbol' in trade_dict:
-                del trade_dict['symbol']
+            trade_data['symbol_id'] = res.id
+            if 'symbol' in trade_data:
+                del trade_data['symbol']
 
             # Status und parent_trade_id setzen
-            # Wenn status nicht gesetzt: Standard = 'open'
-            if 'status' not in trade_dict or not trade_dict['status']:
-                trade_dict['status'] = 'open'
-            # parent_trade_id-Logik:
-            # - Wenn status 'open': parent_trade_id = neue UUID (wenn nicht gesetzt)
-            # - Wenn status 'closed': parent_trade_id muss gesetzt sein (sonst Fehler)
-            if trade_dict['status'] == 'open':
-                if 'parent_trade_id' not in trade_dict or not trade_dict['parent_trade_id']:
-                    trade_dict['parent_trade_id'] = str(uuid.uuid4())
-            elif trade_dict['status'] == 'closed':
-                if 'parent_trade_id' not in trade_dict or not trade_dict['parent_trade_id']:
+            if 'status' not in trade_data or not trade_data['status']:
+                trade_data['status'] = 'open'
+            if trade_data['status'] == 'open':
+                if 'parent_trade_id' not in trade_data or not trade_data['parent_trade_id']:
+                    trade_data['parent_trade_id'] = str(uuid.uuid4())
+            elif trade_data['status'] == 'closed':
+                if 'parent_trade_id' not in trade_data or not trade_data['parent_trade_id']:
                     raise ValueError("parent_trade_id muss für geschlossene Trades gesetzt sein!")
 
-            # --- fee MUSS float sein (DB-Spalte ist Float); falls dict, extrahiere 'cost' ---
-            if 'fee' in trade_dict:
-                fee_val = trade_dict['fee']
+            # Fee immer als float speichern
+            if 'fee_paid' in trade_data:
+                fee_val = trade_data['fee_paid']
                 if isinstance(fee_val, dict):
-                    trade_dict['fee'] = float(fee_val.get('cost', 0.0))
+                    trade_data['fee_paid'] = float(fee_val.get('cost', 0.0))
                 elif not isinstance(fee_val, (float, int)):
-                    # Versuche zu konvertieren, sonst setze auf 0.0
                     try:
-                        trade_dict['fee'] = float(fee_val)
+                        trade_data['fee_paid'] = float(fee_val)
                     except Exception:
-                        trade_dict['fee'] = 0.0
-            if 'extra' in trade_dict and isinstance(trade_dict['extra'], dict):
-                trade_dict['extra'] = json.dumps(trade_dict['extra'])
+                        trade_data['fee_paid'] = 0.0
+            # Profit immer als float speichern
+            if 'profit_realized' in trade_data:
+                profit_val = trade_data['profit_realized']
+                if not isinstance(profit_val, (float, int)):
+                    try:
+                        trade_data['profit_realized'] = float(profit_val)
+                    except Exception:
+                        trade_data['profit_realized'] = 0.0
 
-            # --- Konvertiere alle numpy-Typen zu nativen Python-Typen ---
+            # raw_order_data als JSON-String speichern, falls dict
+            if 'raw_order_data' in trade_data and isinstance(trade_data['raw_order_data'], dict):
+                trade_data['raw_order_data'] = json.dumps(trade_data['raw_order_data'])
+            if 'extra' in trade_data and isinstance(trade_data['extra'], dict):
+                trade_data['extra'] = json.dumps(trade_data['extra'])
+
+            # Konvertiere alle numpy-Typen zu nativen Python-Typen
             try:
-                for k, v in list(trade_dict.items()):
-                    # np.generic deckt np.float64, np.int64, etc. ab
+                for k, v in list(trade_data.items()):
                     if isinstance(v, np.generic):
-                        trade_dict[k] = v.item()
+                        trade_data[k] = v.item()
             except ImportError:
-                pass  # numpy nicht installiert, ignoriere
+                pass
 
             session.execute(sqlalchemy.text("""
-                INSERT INTO trades (id, transaction_id, parent_trade_id, symbol_id, market_type, timestamp, side, status, qty, price, fee, profit, order_id, extra)
-                VALUES (:id, :transaction_id, :parent_trade_id, :symbol_id, :market_type, :timestamp, :side, :status, :qty, :price, :fee, :profit, :order_id, :extra)
-            """), trade_dict)
+                INSERT INTO trades (
+                    id, transaction_id, parent_trade_id, symbol_id, market_type, timestamp, side, status,
+                    trade_volume, entry_price, stop_loss_price, take_profit_price, signal_volume, exit_reason,
+                    order_identifier, fee_paid, profit_realized, raw_order_data, extra
+                ) VALUES (
+                    :id, :transaction_id, :parent_trade_id, :symbol_id, :market_type, :timestamp, :side, :status,
+                    :trade_volume, :entry_price, :stop_loss_price, :take_profit_price, :signal_volume, :exit_reason,
+                    :order_identifier, :fee_paid, :profit_realized, :raw_order_data, :extra
+                )
+            """), trade_data)
             session.commit()
         except Exception as e:
             session.rollback()

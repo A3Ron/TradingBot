@@ -594,7 +594,7 @@ class SpotLongTrader(BaseTrader):
                 self.close_trade('spot', 'long', volume_to_sell, current_price, 'take_profit', transaction_id)
                 return "take_profit"
             except Exception as e:
-                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Take-Profit SELL: {e} | Vol: {volume_to_sell} | Preis: {current_price}")
+                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Take-Profit SELL: {e} | Vol: {volume_to_sell} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
                 self.send_telegram(err_msg)
                 return None
@@ -619,7 +619,7 @@ class SpotLongTrader(BaseTrader):
                 self.close_trade('spot', 'long', volume_to_sell, current_price, 'stop_loss', transaction_id)
                 return "stop_loss"
             except Exception as e:
-                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Stop-Loss SELL: {e} | Vol: {volume_to_sell} | Preis: {current_price}")
+                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Stop-Loss SELL: {e} | Vol: {volume_to_sell} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
                 self.send_telegram(err_msg)
                 return None
@@ -667,7 +667,7 @@ class SpotLongTrader(BaseTrader):
                 self.close_trade('spot', 'long', available, current_price, 'momentum_exit', transaction_id)
                 return "momentum_exit"
             except Exception as e:
-                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Momentum-Exit SELL: {e} | Vol: {available} | Preis: {current_price}")
+                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Momentum-Exit SELL: {e} | Vol: {available} | Preis: {current_price}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
                 self.send_telegram(err_msg)
                 # Step 5: Log error and do not mark as closed
