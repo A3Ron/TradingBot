@@ -341,6 +341,21 @@ class BaseTrader:
                 except Exception:
                     fee_paid = 0.0
 
+        # stop_loss_price, take_profit_price, signal_volume aus open_trade/signal extrahieren, sonst None
+        stop_loss_price = None
+        take_profit_price = None
+        signal_volume = None
+        if hasattr(self, 'open_trade') and self.open_trade:
+            signal = self.open_trade.get('signal')
+            if signal:
+                if isinstance(signal, dict):
+                    stop_loss_price = signal.get('stop_loss_price', None) or signal.get('stop_loss', None)
+                    take_profit_price = signal.get('take_profit_price', None) or signal.get('take_profit', None)
+                    signal_volume = signal.get('signal_volume', None) or signal.get('volume', None)
+                else:
+                    stop_loss_price = getattr(signal, 'stop_loss_price', None) or getattr(signal, 'stop_loss', None)
+                    take_profit_price = getattr(signal, 'take_profit_price', None) or getattr(signal, 'take_profit', None)
+                    signal_volume = getattr(signal, 'signal_volume', None) or getattr(signal, 'volume', None)
         trade_data = {
             'symbol': self.symbol,
             'market_type': market_type,
@@ -348,6 +363,9 @@ class BaseTrader:
             'side': trade_side,
             'trade_volume': trade_volume,
             'entry_price': entry_price,
+            'stop_loss_price': stop_loss_price,
+            'take_profit_price': take_profit_price,
+            'signal_volume': signal_volume,
             'fee_paid': fee_paid,
             'profit_realized': profit_realized,
             'order_identifier': order_identifier,
