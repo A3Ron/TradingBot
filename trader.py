@@ -24,6 +24,80 @@ class BaseTrader:
     """
     Basisklasse für Trader-Logik (Spot/Futures). Verwaltet Symbol, Konfiguration, Exchange, Logging und Telegram.
     """
+        
+    def round_volume_to_step(self, volume: float) -> float:
+        """
+        Rundet das Volumen dynamisch nach Exchange-Spezifikation (stepSize/amount precision).
+        """
+        try:
+            market = self.exchange.market(self.symbol)
+            step = market.get('precision', {}).get('amount')
+            if step is not None:
+                # Präzision als Dezimalstellen
+                return round(volume, int(step))
+            # Alternativ: stepSize aus limits
+            step_size = market.get('limits', {}).get('amount', {}).get('step')
+            if step_size:
+                return (volume // step_size) * step_size
+        except Exception as e:
+            self.data.save_log(LOG_WARN, 'trader', 'round_volume_to_step', f"Fehler bei Volumenrundung: {e}", None)
+        # Fallback: 6 Nachkommastellen
+        return round(volume, 6)
+
+    def validate_signal(self, signal, transaction_id=None):
+        """
+        Prüft, ob das Signal-Objekt alle Pflichtfelder (entry, stop_loss, take_profit, volume) enthält und diese numerisch sind.
+        Loggt einen Fehler und gibt False zurück, wenn etwas fehlt oder falsch typisiert ist.
+        """
+        required_fields = ['entry', 'stop_loss', 'take_profit', 'volume']
+        for field in required_fields:
+            value = getattr(signal, field, None)
+            if value is None:
+                self.data.save_log(LOG_ERROR, self.__class__.__name__, 'validate_signal', f"Signal fehlt Pflichtfeld: {field}", transaction_id)
+                return False
+            if not isinstance(value, (int, float)):
+                try:
+                    float(value)
+                except Exception:
+                    self.data.save_log(LOG_ERROR, self.__class__.__name__, 'validate_signal', f"Signal-Feld {field} ist kein numerischer Wert: {value}", transaction_id)
+                    return False
+        return True
+
+    def validate_trade_dict(self, trade_dict, transaction_id=None):
+        """
+        Prüft, ob das Trade-Dict alle Pflichtfelder enthält und die Typen stimmen. Loggt Fehler und gibt False zurück, wenn etwas fehlt.
+        """
+        required_fields = ['symbol', 'market_type', 'timestamp', 'side', 'qty', 'price', 'fee', 'profit', 'order_id', 'status', 'parent_trade_id', 'exit_type']
+        for field in required_fields:
+            if field not in trade_dict:
+                self.data.save_log(LOG_ERROR, self.__class__.__name__, 'validate_trade_dict', f"Trade-Dict fehlt Pflichtfeld: {field}", transaction_id)
+                return False
+        # Typ-Checks für numerische Felder
+        for num_field in ['qty', 'price', 'fee', 'profit']:
+            value = trade_dict.get(num_field)
+            if not isinstance(value, (int, float)):
+                try:
+                    float(value)
+                except Exception:
+                    self.data.save_log(LOG_ERROR, self.__class__.__name__, 'validate_trade_dict', f"Trade-Dict-Feld {num_field} ist kein numerischer Wert: {value}", transaction_id)
+                    return False
+        return True
+
+    @staticmethod
+    def _dict_to_signal_obj(signal_dict):
+        """
+        Hilfsfunktion: Wandelt ein Signal-Dict in ein Objekt mit Attributen um.
+        Gibt das Objekt zurück. Falls kein Dict, wird das Original zurückgegeben.
+        """
+        if not isinstance(signal_dict, dict):
+            return signal_dict
+        class SignalObj:
+            pass
+        signal_obj = SignalObj()
+        for k, v in signal_dict.items():
+            setattr(signal_obj, k, v)
+        return signal_obj
+
     def __init__(self, config: dict, symbol: str, data_fetcher: Optional[DataFetcher] = None, exchange: Optional[Any] = None, strategy_config: Optional[dict] = None):
         """
         Args:
@@ -63,13 +137,13 @@ class BaseTrader:
                 self.data.save_log(LOG_WARN, 'trader', 'load_last_open_trade', f"Konnte OHLCV für offenen Trade nicht laden: {e}", transaction_id)
             # Signal-Objekt-Sicherheit (wie im Rest des Codes)
             signal = trade.get('signal', {})
-            if isinstance(signal, dict):
-                class SignalObj:
-                    pass
-                signal_obj = SignalObj()
-                for k, v in signal.items():
-                    setattr(signal_obj, k, v)
-                trade['signal'] = signal_obj
+            if hasattr(signal, 'to_dict'):
+                signal = signal.to_dict()
+            signal_obj = self._dict_to_signal_obj(signal)
+            if not self.validate_signal(signal_obj, transaction_id):
+                self.data.save_log(LOG_ERROR, self.__class__.__name__, 'load_last_open_trade', f"Ungültiges Signal im geladenen Trade: {signal}", transaction_id)
+                return
+            trade['signal'] = signal_obj
             # Validierung: df und signal müssen vorhanden sein
             if 'df' not in trade or trade['df'] is None:
                 self.data.save_log(LOG_WARN, 'trader', 'load_last_open_trade', f"Warnung: Geladener Trade hat kein df! {trade}", transaction_id)
@@ -92,14 +166,14 @@ class BaseTrader:
         df = self.open_trade['df']
         # --- Signal-Objekt-Sicherheit: dict zu Objekt konvertieren falls nötig ---
         signal = self.open_trade['signal']
-        if isinstance(signal, dict):
-            class SignalObj:
-                pass
-            signal_obj = SignalObj()
-            for k, v in signal.items():
-                setattr(signal_obj, k, v)
-            self.open_trade['signal'] = signal_obj
-            signal = signal_obj
+        if hasattr(signal, 'to_dict'):
+            signal = signal.to_dict()
+        signal_obj = self._dict_to_signal_obj(signal)
+        if not self.validate_signal(signal_obj, transaction_id):
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_open_trade', f"Ungültiges Signal im offenen Trade: {signal}", transaction_id)
+            return None
+        self.open_trade['signal'] = signal_obj
+        signal = signal_obj
         self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'handle_open_trade', f"[{market_type.upper()}] Überwache offenen Trade für {symbol}.", transaction_id)
         exit_type = self.monitor_trade(signal, df, strategy, transaction_id)
         if exit_type:
@@ -118,14 +192,22 @@ class BaseTrader:
         """
         symbol = candidate['symbol']
         signal = candidate['signal']
+        if hasattr(signal, 'to_dict'):
+            signal = signal.to_dict()
+        signal_obj = self._dict_to_signal_obj(signal)
+        if not self.validate_signal(signal_obj, transaction_id):
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'handle_new_trade_candidate', f"Ungültiges Signal im Kandidaten: {signal}", transaction_id)
+            return
+        candidate['signal'] = signal_obj
+        signal = signal_obj
         # Stelle sicher, dass self.symbol immer zum aktuellen Kandidaten passt
         self.symbol = symbol
         # Debug-Log: Signal und Symbol vor Ausführung
         try:
-            entry = signal.get('entry', None) if isinstance(signal, dict) else getattr(signal, 'entry', None)
-            stop_loss = signal.get('stop_loss', None) if isinstance(signal, dict) else getattr(signal, 'stop_loss', None)
-            take_profit = signal.get('take_profit', None) if isinstance(signal, dict) else getattr(signal, 'take_profit', None)
-            volume = signal.get('volume', None) if isinstance(signal, dict) else getattr(signal, 'volume', None)
+            entry = getattr(signal, 'entry', None)
+            stop_loss = getattr(signal, 'stop_loss', None)
+            take_profit = getattr(signal, 'take_profit', None)
+            volume = getattr(signal, 'volume', None)
         except Exception:
             entry = stop_loss = take_profit = volume = None
         self.data.save_log(
@@ -137,17 +219,13 @@ class BaseTrader:
         )
         self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[{market_type.upper()}] Führe Trade aus für {symbol} mit Vol-Score {candidate['vol_score']}", transaction_id)
         try:
-            # Convert signal to dict if it's a pandas Series
+            # Falls signal (wieder) pandas Series ist, zuerst in dict umwandeln
             if hasattr(signal, 'to_dict'):
                 signal = signal.to_dict()
-                candidate['signal'] = signal
-            # Erzeuge ein Dummy-Objekt mit Attributen für execute_trade
-            class SignalObj:
-                pass
-            signal_obj = SignalObj()
-            for k, v in signal.items():
-                setattr(signal_obj, k, v)
-            result = execute_trade_method(signal_obj, transaction_id)
+                signal_obj = self._dict_to_signal_obj(signal)
+                candidate['signal'] = signal_obj
+                signal = signal_obj
+            result = execute_trade_method(signal, transaction_id)
             self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[MAIN] {market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol}: {result}", transaction_id)
             if result:
                 self.send_telegram(f"{market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol} Entry: {signal.get('entry')} SL: {signal.get('stop_loss')} TP: {signal.get('take_profit')} Vol: {signal.get('volume')}", transaction_id)
@@ -251,6 +329,9 @@ class BaseTrader:
             'parent_trade_id': parent_trade_id,
             'exit_type': exit_type
         }
+        if not self.validate_trade_dict(trade_dict, transaction_id):
+            self.data.save_log(LOG_ERROR, 'trader', 'close_trade', f"Ungültiges Trade-Dict beim Schließen: {trade_dict}", transaction_id)
+            return
         self.data.save_trade(trade_dict, transaction_id)
         self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_type}): {trade_dict}", transaction_id)
 
@@ -313,6 +394,7 @@ class BaseTrader:
             stake_volume = max_stake / signal.entry
             # Nimm das Minimum aus stake_volume, risk_volume, signal.volume, available
             volume = min(stake_volume, risk_volume, signal.volume, available)
+            volume = self.round_volume_to_step(volume)
             return volume
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'get_trade_volume', f"Fehler bei Volumenberechnung: {e}\n{traceback.format_exc()}", transaction_id)
@@ -396,6 +478,7 @@ class SpotLongTrader(BaseTrader):
             raise ValueError("transaction_id ist Pflicht für execute_trade")
         self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Starte execute_trade für {self.symbol} (LONG). Signal: Entry={signal.entry} SL={signal.stop_loss} TP={signal.take_profit} Vol={signal.volume}", transaction_id)
         volume = self.get_trade_volume(signal, transaction_id)
+        volume = self.round_volume_to_step(volume)
         self.data.save_log(LOG_DEBUG, 'trader', 'execute_trade', f"Berechnetes Volumen für {self.symbol}: {volume}", transaction_id)
         msg = f"LONG {self.symbol} @ {signal.entry} Vol: {volume}"
         parent_trade_id = str(uuid.uuid4())
@@ -475,7 +558,7 @@ class SpotLongTrader(BaseTrader):
         except Exception as e:
             self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"[{self.symbol}] Fehler beim Abfragen des Balances: {e}", transaction_id)
             available = trade.volume
-        volume_to_sell = round(available, 6)
+        volume_to_sell = self.round_volume_to_step(available)
         self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[{self.symbol}] Aktuelles Volumen: {volume_to_sell}, minQty: {min_qty}, Preis: {current_price}", transaction_id)
         if volume_to_sell < min_qty or volume_to_sell == 0.0:
             entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0

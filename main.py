@@ -24,8 +24,6 @@ def format_startup_message(config):
     # Symbole aus der Datenbank lesen (selected)
     spot_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type='spot')]
     futures_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type='futures')]
-    spot_symbols_str = ', '.join(spot_symbols) if spot_symbols else '-'
-    futures_symbols_str = ', '.join(futures_symbols) if futures_symbols else '-'
     # Initialisiertes Symbol: erstes Spot-Symbol, sonst erstes Futures-Symbol, sonst leer
     init_symbol = spot_symbols[0] if spot_symbols else (futures_symbols[0] if futures_symbols else '')
     strategy_cfg = {}
@@ -41,8 +39,6 @@ def format_startup_message(config):
     msg = (
         f"TradingBot gestartet!\n"
         f"Modus: {config['execution'].get('mode', '')}\n"
-        f"Spot-Symbole: {spot_symbols_str}\n"
-        f"Futures-Symbole: {futures_symbols_str}\n"
         f"Initialisiertes Symbol: {init_symbol}\n"
         f"Timeframe: {config['trading'].get('timeframe', '')}\n"
         f"Strategie: {strategy_cfg.get('name', 'Unbekannt')}\n"
@@ -87,7 +83,6 @@ try:
     config = resolve_env_vars(config)
     timeframe = config['trading']['timeframe']
     data_fetcher = DataFetcher()
-    data_fetcher.save_log(LOG_INFO, MAIN, INIT, 'Config und DataFetcher erfolgreich geladen.', str(uuid.uuid4()))
 except Exception as e:
     data_fetcher.save_log(LOG_ERROR, MAIN, INIT, f'Fehler beim Laden der Config/DataFetcher: {e}', str(uuid.uuid4()))
 
@@ -107,10 +102,7 @@ except Exception:
 
 # Symbollisten für Spot (Long) und Futures (Short) aus der Datenbank (nur selected)
 spot_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="spot")]
-data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Alle Spot-Symbole: {spot_symbols}", str(uuid.uuid4()))
 futures_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="futures")]
-data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Alle Futures-Symbole: {futures_symbols}", str(uuid.uuid4()))
-
 
 # Strategie-Instanzen für beide Typen
 strategies = get_strategy(config)
@@ -135,10 +127,8 @@ startup_msg = format_startup_message(config)
 
 # Lade offene Trades für alle Trader (Spot-Long und Futures-Short)
 for trader in spot_traders.values():
-    trader.send_telegram(startup_msg)
     trader.load_last_open_trade('long', 'spot')
 for trader in futures_traders.values():
-    trader.send_telegram(startup_msg)
     trader.load_last_open_trade('short', 'futures')
 
 # --- Hauptloop ---
@@ -152,26 +142,20 @@ while True:
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, '--- Starte neuen Loop ---', transaction_id)
 
         # Aktualisiere Spot-OHLCV-Daten und übergebe die gesamte Liste an SpotLongTrader.handle_trades
-        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Aktualisiere Spot-OHLCV-Daten...', transaction_id)
         spot_ohlcv_list = data_fetcher.fetch_ohlcv(spot_symbols, market_type='spot', timeframe=timeframe, transaction_id=transaction_id, limit=price_change_periods + 15)
-        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Bearbeite Spot-Trades...', transaction_id)
         if spot_traders:
             # Debug-Log für alle Spot-Trader: Status von open_trade
             for symbol, trader in spot_traders.items():
                 open_trade_status = f"{trader.open_trade}" if trader.open_trade else "None"
-                data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"SpotTrader {symbol}: open_trade={open_trade_status}", transaction_id)
             # Übergebe die gesamte OHLCV-Liste an die zentrale handle_trades-Methode des ersten Spot-Traders
             list(spot_traders.values())[0].handle_trades(spot_strategy, ohlcv_list=spot_ohlcv_list, transaction_id=transaction_id)
 
         # Aktualisiere Futures-OHLCV-Daten und übergebe die gesamte Liste an FuturesShortTrader.handle_trades
-        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Aktualisiere Futures-OHLCV-Daten...', transaction_id)
         futures_ohlcv_list = data_fetcher.fetch_ohlcv(futures_symbols, market_type='futures', timeframe=timeframe, transaction_id=transaction_id, limit=price_change_periods + 15)
-        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Bearbeite Futures-Trades...', transaction_id)
         if futures_traders:
             # Debug-Log für alle Futures-Trader: Status von open_trade
             for symbol, trader in futures_traders.items():
                 open_trade_status = f"{trader.open_trade}" if trader.open_trade else "None"
-                data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"FuturesTrader {symbol}: open_trade={open_trade_status}", transaction_id)
             # Übergebe die gesamte OHLCV-Liste an die zentrale handle_trades-Methode des ersten Futures-Traders
             list(futures_traders.values())[0].handle_trades(futures_strategy, ohlcv_list=futures_ohlcv_list, transaction_id=transaction_id)
 
