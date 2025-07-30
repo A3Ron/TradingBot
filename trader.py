@@ -176,6 +176,66 @@ class BaseTrader:
             parent_trade_id = self.open_trade['signal'].parent_trade_id
         if not parent_trade_id:
             parent_trade_id = str(uuid.uuid4())
+        # Baue extra analog zu open: Signal, Exit-Typ, ggf. Order-Info
+        extra_info = {
+            'exit_type': exit_type,
+            'transaction_id': transaction_id
+        }
+        # Füge ggf. weitere Infos hinzu, z.B. entry, stop_loss, take_profit, falls vorhanden
+        if hasattr(self, 'open_trade') and self.open_trade:
+            signal = self.open_trade.get('signal')
+            if signal:
+                # Falls signal ein Objekt ist, in dict umwandeln
+                if not isinstance(signal, dict):
+                    signal = {k: getattr(signal, k) for k in dir(signal) if not k.startswith('__') and not callable(getattr(signal, k))}
+                extra_info['signal'] = signal
+            # Füge ggf. Order-Info hinzu
+            if 'extra' in self.open_trade:
+                extra_info['open_extra'] = self.open_trade['extra']
+            if 'order_id' in self.open_trade:
+                extra_info['open_order_id'] = self.open_trade['order_id']
+        # Berechne Profit (USD):
+        entry_price = None
+        if hasattr(self, 'open_trade') and self.open_trade:
+            signal = self.open_trade.get('signal')
+            if signal:
+                if isinstance(signal, dict):
+                    entry_price = signal.get('entry', None) or signal.get('price', None)
+                else:
+                    entry_price = getattr(signal, 'entry', None) or getattr(signal, 'price', None)
+        if entry_price is not None and entry_price != 0:
+            if side == 'long':
+                profit = (price - entry_price) * qty
+            elif side == 'short':
+                profit = (entry_price - price) * qty
+            else:
+                profit = 0.0
+        else:
+            profit = 0.0
+        # Übernehme order_id aus open_trade, falls vorhanden
+        order_id = ''
+        if hasattr(self, 'open_trade') and self.open_trade:
+            if 'order_id' in self.open_trade:
+                order_id = self.open_trade['order_id']
+        # Validierung und Logging für qty
+        if qty is None or qty == 0.0:
+            warn_msg = f"[WARN] close_trade wird mit qty={qty} aufgerufen! Symbol={self.symbol}, side={side}, price={price}, exit_type={exit_type}, transaction_id={transaction_id}"
+            self.data.save_log(LOG_WARN, 'trader', 'close_trade', warn_msg, transaction_id)
+
+        # Fee aus open_trade übernehmen, falls vorhanden
+        fee = 0.0
+        if hasattr(self, 'open_trade') and self.open_trade:
+            if 'fee' in self.open_trade:
+                try:
+                    # Fee kann float, np.float, dict (mit 'cost') oder None sein
+                    open_fee = self.open_trade['fee']
+                    if isinstance(open_fee, dict):
+                        fee = float(open_fee.get('cost', 0.0))
+                    elif open_fee is not None:
+                        fee = float(open_fee)
+                except Exception:
+                    fee = 0.0
+
         trade_dict = {
             'symbol': self.symbol,
             'market_type': market_type,
@@ -183,10 +243,10 @@ class BaseTrader:
             'side': side,
             'qty': qty,
             'price': price,
-            'fee': 0.0,
-            'profit': 0.0,
-            'order_id': '',
-            'extra': 'closed',
+            'fee': fee,
+            'profit': profit,
+            'order_id': order_id,
+            'extra': str(extra_info),
             'status': 'closed',
             'parent_trade_id': parent_trade_id,
             'exit_type': exit_type
@@ -418,15 +478,24 @@ class SpotLongTrader(BaseTrader):
         volume_to_sell = round(available, 6)
         self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[{self.symbol}] Aktuelles Volumen: {volume_to_sell}, minQty: {min_qty}, Preis: {current_price}", transaction_id)
         if volume_to_sell < min_qty or volume_to_sell == 0.0:
+            entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
+            notional = volume_to_sell * entry_price
+            pnl_pct = 0.0
+            pnl_usd = 0.0
             msg = (f"[SPOT-LONG EXIT] {self.symbol} | Grund: Volumen zu klein | Vol: {volume_to_sell} < minQty: {min_qty} | Preis: {current_price} | "
-                   f"Trade wird als geschlossen markiert.")
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Trade wird als geschlossen markiert.")
             self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
             self.send_telegram(msg)
             self.close_trade('spot', 'long', volume_to_sell, current_price, 'volume_too_small', transaction_id)
             return "volume_too_small"
         # Take-Profit Exit
         if current_price >= trade.take_profit:
-            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} >= TP: {trade.take_profit} | Vol: {volume_to_sell}")
+            entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
+            notional = volume_to_sell * entry_price
+            pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
+            pnl_usd = (current_price - entry_price) * volume_to_sell if entry_price else 0.0
+            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} >= TP: {trade.take_profit} | Vol: {volume_to_sell} | "
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
             self.send_telegram(msg)
             try:
@@ -443,7 +512,12 @@ class SpotLongTrader(BaseTrader):
                 return None
         # Stop-Loss Exit
         if current_price <= trade.stop_loss:
-            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} <= SL: {trade.stop_loss} | Vol: {volume_to_sell}")
+            entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
+            notional = volume_to_sell * entry_price
+            pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
+            pnl_usd = (current_price - entry_price) * volume_to_sell if entry_price else 0.0
+            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} <= SL: {trade.stop_loss} | Vol: {volume_to_sell} | "
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
             self.send_telegram(msg)
             try:
@@ -460,7 +534,12 @@ class SpotLongTrader(BaseTrader):
                 return None
         # Momentum-Exit (step-by-step debug)
         if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
-            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | RSI < {getattr(strategy, 'momentum_exit_rsi', 50)} | Vol: {volume_to_sell} | Preis: {current_price}")
+            entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
+            notional = volume_to_sell * entry_price
+            pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
+            pnl_usd = (current_price - entry_price) * volume_to_sell if entry_price else 0.0
+            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | RSI < {getattr(strategy, 'momentum_exit_rsi', 50)} | Vol: {volume_to_sell} | Preis: {current_price} | "
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
             self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Momentum-Exit: Symbol={self.symbol}, VolToSell={volume_to_sell}, minQty={min_qty}, Price={current_price}", transaction_id)
             # Step 1: Check available balance again
@@ -482,7 +561,8 @@ class SpotLongTrader(BaseTrader):
             # Step 3: Log all relevant context before order
             self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step3: Momentum-Exit Order-Context: Symbol={self.symbol}, VolToSell={available}, minQty={min_qty_check}, Price={current_price}", transaction_id)
             if available < min_qty_check or available == 0.0:
-                msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | Volumen zu klein | Vol: {available} < minQty: {min_qty_check} | Preis: {current_price} | Trade wird als geschlossen markiert.")
+                msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | Volumen zu klein | Vol: {available} < minQty: {min_qty_check} | Preis: {current_price} | "
+                       f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Trade wird als geschlossen markiert.")
                 self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
                 self.send_telegram(msg)
                 self.close_trade('spot', 'long', available, current_price, 'momentum_exit_volume_too_small', transaction_id)
@@ -667,7 +747,12 @@ class FuturesShortTrader(BaseTrader):
             self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"Fehler beim Abfragen der offenen Short-Position: {e}", transaction_id)
         # Take-Profit Exit
         if current_price <= trade.take_profit:
-            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} <= TP: {trade.take_profit} | PosAmt: {position_amt}")
+            entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
+            notional = position_amt * entry_price
+            pnl_pct = ((entry_price - current_price) / entry_price * 100) if entry_price else 0.0
+            pnl_usd = (entry_price - current_price) * position_amt if entry_price else 0.0
+            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Take-Profit erreicht | Preis: {current_price} <= TP: {trade.take_profit} | PosAmt: {position_amt} | "
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
             self.send_telegram(msg)
             try:
@@ -679,7 +764,12 @@ class FuturesShortTrader(BaseTrader):
             self.close_trade('futures', 'short', position_amt, current_price, 'take_profit', transaction_id)
             return "take_profit"
         if current_price >= trade.stop_loss:
-            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} >= SL: {trade.stop_loss} | PosAmt: {position_amt}")
+            entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
+            notional = position_amt * entry_price
+            pnl_pct = ((entry_price - current_price) / entry_price * 100) if entry_price else 0.0
+            pnl_usd = (entry_price - current_price) * position_amt if entry_price else 0.0
+            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Stop-Loss erreicht | Preis: {current_price} >= SL: {trade.stop_loss} | PosAmt: {position_amt} | "
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
             self.send_telegram(msg)
             try:
@@ -692,7 +782,12 @@ class FuturesShortTrader(BaseTrader):
             return "stop_loss"
         # Momentum-Exit (step-by-step debug)
         if hasattr(strategy, 'should_exit_momentum') and strategy.should_exit_momentum(df):
-            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | RSI > {getattr(strategy, 'momentum_exit_rsi', 50)} | PosAmt: {position_amt} | Preis: {current_price}")
+            entry_price = getattr(trade, 'entry', None) or getattr(trade, 'price', None) or 0.0
+            notional = position_amt * entry_price
+            pnl_pct = ((entry_price - current_price) / entry_price * 100) if entry_price else 0.0
+            pnl_usd = (entry_price - current_price) * position_amt if entry_price else 0.0
+            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | RSI > {getattr(strategy, 'momentum_exit_rsi', 50)} | PosAmt: {position_amt} | Preis: {current_price} | "
+                   f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
             self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Momentum-Exit: Symbol={self.symbol}, PosAmt={position_amt}, Price={current_price}", transaction_id)
             # Step 1: Check open position again
@@ -714,7 +809,8 @@ class FuturesShortTrader(BaseTrader):
             # Step 2: Log all relevant context before order
             self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step2: Momentum-Exit Order-Context: Symbol={self.symbol}, PosAmt={position_amt_check}, Price={current_price}", transaction_id)
             if position_amt_check == 0.0:
-                msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | Keine offene Short-Position zum Schließen | Preis: {current_price} | Trade wird als geschlossen markiert.")
+                msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | Keine offene Short-Position zum Schließen | Preis: {current_price} | "
+                       f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Trade wird als geschlossen markiert.")
                 self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
                 self.send_telegram(msg)
                 self.close_trade('futures', 'short', 0.0, current_price, 'momentum_exit_no_position', transaction_id)
