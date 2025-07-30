@@ -2,8 +2,6 @@ import os
 import requests
 import uuid
 import traceback
-from data import DataFetcher
-
 
 def send_message(message: str, transaction_id: str = None):
     """
@@ -14,17 +12,11 @@ def send_message(message: str, transaction_id: str = None):
     telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
     if not telegram_token or not telegram_chat_id:
         return
+    # Prefix message with transaction_id if provided
+    if transaction_id:
+        msg = f"[{transaction_id}] {message}"
+    else:
+        msg = message
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-    data = {"chat_id": telegram_chat_id, "text": message}
-    try:
-        requests.post(url, data=data)
-    except Exception as e:
-        # Logge Fehler mit DataFetcher
-        data_fetcher = DataFetcher()
-        data_fetcher.save_log(
-            'WARN',
-            'telegram_utils',
-            'send_telegram_message',
-            f"Telegram error: {e}\n{traceback.format_exc()}",
-            transaction_id or str(uuid.uuid4())
-        )
+    data = {"chat_id": telegram_chat_id, "text": msg}
+    requests.post(url, data=data)
