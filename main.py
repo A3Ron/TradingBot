@@ -77,6 +77,8 @@ load_dotenv()
 
 data_fetcher = None
 timeframe = None
+
+import sys
 try:
     with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f)
@@ -84,11 +86,23 @@ try:
     timeframe = config['trading']['timeframe']
     data_fetcher = DataFetcher()
 except Exception as e:
-    data_fetcher.save_log(LOG_ERROR, MAIN, INIT, f'Fehler beim Laden der Config/DataFetcher: {e}', str(uuid.uuid4()))
+    # Fallback: versuche Telegram-Alert, falls data_fetcher schon existiert
+    try:
+        if data_fetcher and hasattr(data_fetcher, 'save_log'):
+            data_fetcher.save_log(LOG_ERROR, MAIN, INIT, f'Fehler beim Laden der Config/DataFetcher: {e}', str(uuid.uuid4()))
+        # Telegram-Alert, falls DataFetcher schon geladen
+        if data_fetcher and hasattr(data_fetcher, 'telegram_token') and hasattr(data_fetcher, 'telegram_chat_id'):
+            import requests
+            if data_fetcher.telegram_token and data_fetcher.telegram_chat_id:
+                url = f"https://api.telegram.org/bot{data_fetcher.telegram_token}/sendMessage"
+                msg = f"[CRITICAL] Fehler beim Laden der Config/DataFetcher: {e}"
+                requests.post(url, data={"chat_id": data_fetcher.telegram_chat_id, "text": msg})
+    except Exception:
+        pass
+    sys.exit(1)
 
 
-# --- Initiales Symbol-Update beim Start ---
-data_fetcher.update_symbols_from_binance()
+
 
 # Dynamisches Limit aus Strategie-Parametern (price_change_periods) nur einmalig auslesen
 price_change_periods = None
@@ -162,3 +176,13 @@ while True:
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f'Loop fertig', transaction_id)
     except Exception as e:
         data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Error: {e}", transaction_id)
+        # Telegram-Alert bei kritischen Fehlern im Main-Loop
+        try:
+            if hasattr(data_fetcher, 'telegram_token') and hasattr(data_fetcher, 'telegram_chat_id'):
+                import requests
+                if data_fetcher.telegram_token and data_fetcher.telegram_chat_id:
+                    url = f"https://api.telegram.org/bot{data_fetcher.telegram_token}/sendMessage"
+                    msg = f"[CRITICAL] Fehler im Main-Loop: {e}"
+                    requests.post(url, data={"chat_id": data_fetcher.telegram_chat_id, "text": msg})
+        except Exception:
+            pass

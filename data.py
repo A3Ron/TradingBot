@@ -395,6 +395,10 @@ class DataFetcher:
                 if 'parent_trade_id' not in trade_data or not trade_data['parent_trade_id']:
                     raise ValueError("parent_trade_id muss für geschlossene Trades gesetzt sein!")
 
+            # exit_reason Default setzen, falls nicht vorhanden
+            if 'exit_reason' not in trade_data:
+                trade_data['exit_reason'] = None
+
             # Fee immer als float speichern
             if 'fee_paid' in trade_data:
                 fee_val = trade_data['fee_paid']

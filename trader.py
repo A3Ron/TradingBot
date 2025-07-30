@@ -228,7 +228,12 @@ class BaseTrader:
             result = execute_trade_method(signal, transaction_id)
             self.data.save_log(LOG_INFO, self.__class__.__name__, 'handle_new_trade_candidate', f"[MAIN] {market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol}: {result}", transaction_id)
             if result:
-                self.send_telegram(f"{market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol} Entry: {signal.get('entry')} SL: {signal.get('stop_loss')} TP: {signal.get('take_profit')} Vol: {signal.get('volume')}", transaction_id)
+                self.send_telegram(
+                    f"{market_type.capitalize()}-{side.capitalize()}-Trade ausgeführt für {symbol} "
+                    f"Entry: {getattr(signal, 'entry', None)} SL: {getattr(signal, 'stop_loss', None)} "
+                    f"TP: {getattr(signal, 'take_profit', None)} Vol: {getattr(signal, 'volume', None)}",
+                    transaction_id
+                )
                 self.open_trade = candidate
             else:
                 self.data.save_log(LOG_WARN, self.__class__.__name__, 'handle_new_trade_candidate', f"[{market_type.upper()}] Trade für {symbol} wurde nicht ausgeführt (execute_trade lieferte None).", transaction_id)
@@ -349,7 +354,8 @@ class BaseTrader:
             'extra': str(extra_information),
             'status': 'closed',
             'parent_trade_id': parent_trade_id,
-            'exit_reason': exit_reason
+            'exit_reason': exit_reason,
+            'raw_order_data': ''  # Immer setzen, auch wenn leer
         }
         self.data.save_trade(trade_data, transaction_id)
         self.data.save_log(LOG_INFO, 'trader', 'close_trade', f"Trade geschlossen ({exit_reason}): {trade_data}", transaction_id)
