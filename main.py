@@ -4,7 +4,7 @@ import yaml
 import time
 import re
 from dotenv import load_dotenv
-from data import DataFetcher, filter_by_volume, get_volatility, MIN_VOLUME_USD, fetch_binance_tickers
+from data import DataFetcher, filter_by_volume, get_volatility, fetch_binance_tickers, MIN_VOLUME_USD
 from telegram import send_message
 from trader import SpotLongTrader, FuturesShortTrader
 from strategy import get_strategy

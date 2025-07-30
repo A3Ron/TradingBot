@@ -92,19 +92,34 @@ create_tables(pg_engine)
 # --- Symbol-Filter-Utilities ---
 # Mindestvolumen-Filter (z.B. 1 Mio USD)
 MIN_VOLUME_USD = 1_000_000
+def to_ccxt_symbol(base_asset, quote_asset):
+    """Erzeugt das ccxt-Symbolformat (z.B. BTC/USDT) aus base_asset und quote_asset."""
+    return f"{base_asset}/{quote_asset}"
+
 def filter_by_volume(symbols, tickers, min_volume_usd=MIN_VOLUME_USD):
-    """Filtert Symbole nach Mindestvolumen in USD (24h)."""
+    """Filtert Symbole nach Mindestvolumen in USD (24h). Erwartet Symbole als Dicts mit base_asset und quote_asset."""
     filtered = []
     for s in symbols:
-        t = tickers.get(s)
+        # s kann Dict (mit base_asset, quote_asset) oder String sein (Fallback)
+        if isinstance(s, dict) and 'base_asset' in s and 'quote_asset' in s:
+            ccxt_symbol = to_ccxt_symbol(s['base_asset'], s['quote_asset'])
+            symbol_id = s.get('symbol', ccxt_symbol)
+        else:
+            ccxt_symbol = s
+            symbol_id = s
+        t = tickers.get(ccxt_symbol)
         if t and t.get('quoteVolume', 0) and t['quoteVolume'] * t.get('last', 0) > min_volume_usd:
-            filtered.append(s)
+            filtered.append(symbol_id)
     return filtered
 
 def get_volatility(symbol, tickers=None):
-    """Berechnet die absolute 24h-Preisänderung in Prozent für ein Symbol."""
+    """Berechnet die absolute 24h-Preisänderung in Prozent für ein Symbol. Symbol kann Dict (base_asset, quote_asset) oder String sein."""
     if tickers is not None:
-        t = tickers.get(symbol)
+        if isinstance(symbol, dict) and 'base_asset' in symbol and 'quote_asset' in symbol:
+            ccxt_symbol = to_ccxt_symbol(symbol['base_asset'], symbol['quote_asset'])
+        else:
+            ccxt_symbol = symbol
+        t = tickers.get(ccxt_symbol)
         if t and t.get('percentage') is not None:
             return abs(t['percentage'])
         return 0
