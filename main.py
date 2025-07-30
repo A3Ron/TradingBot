@@ -158,21 +158,31 @@ while True:
             data_fetcher._last_symbol_update = time.time()
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, '--- Starte neuen Loop ---', transaction_id)
 
+        # Debug: Logge aktuelle Symbol-Listen
+        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"spot_symbols: {spot_symbols}", transaction_id)
+        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"futures_symbols: {futures_symbols}", transaction_id)
+        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"spot_traders: {list(spot_traders.keys())}", transaction_id)
+        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"futures_traders: {list(futures_traders.keys())}", transaction_id)
+
         # Aktualisiere Spot-OHLCV-Daten und übergebe die gesamte Liste an SpotLongTrader.handle_trades
         spot_ohlcv_list = data_fetcher.fetch_ohlcv(spot_symbols, market_type='spot', timeframe=timeframe, transaction_id=transaction_id, limit=price_change_periods + 15)
+        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"spot_ohlcv_list len: {len(spot_ohlcv_list) if spot_ohlcv_list is not None else 'None'}", transaction_id)
         if spot_traders:
             # Debug-Log für alle Spot-Trader: Status von open_trade
             for symbol, trader in spot_traders.items():
                 open_trade_status = f"{trader.open_trade}" if trader.open_trade else "None"
+                data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"SpotTrader {symbol} open_trade: {open_trade_status}", transaction_id)
             # Übergebe die gesamte OHLCV-Liste an die zentrale handle_trades-Methode des ersten Spot-Traders
             list(spot_traders.values())[0].handle_trades(spot_strategy, ohlcv_list=spot_ohlcv_list, transaction_id=transaction_id)
 
         # Aktualisiere Futures-OHLCV-Daten und übergebe die gesamte Liste an FuturesShortTrader.handle_trades
         futures_ohlcv_list = data_fetcher.fetch_ohlcv(futures_symbols, market_type='futures', timeframe=timeframe, transaction_id=transaction_id, limit=price_change_periods + 15)
+        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"futures_ohlcv_list len: {len(futures_ohlcv_list) if futures_ohlcv_list is not None else 'None'}", transaction_id)
         if futures_traders:
             # Debug-Log für alle Futures-Trader: Status von open_trade
             for symbol, trader in futures_traders.items():
                 open_trade_status = f"{trader.open_trade}" if trader.open_trade else "None"
+                data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"FuturesTrader {symbol} open_trade: {open_trade_status}", transaction_id)
             # Übergebe die gesamte OHLCV-Liste an die zentrale handle_trades-Methode des ersten Futures-Traders
             list(futures_traders.values())[0].handle_trades(futures_strategy, ohlcv_list=futures_ohlcv_list, transaction_id=transaction_id)
 
