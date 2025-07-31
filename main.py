@@ -8,6 +8,7 @@ from data import DataFetcher, filter_by_volume, get_volatility, fetch_binance_ti
 from telegram import send_message
 from trader import SpotLongTrader, FuturesShortTrader
 from strategy import get_strategy
+import sys
 
 # --- Konstanten ---
 CONFIG_PATH = 'config.yaml'
@@ -84,7 +85,6 @@ load_dotenv()
 data_fetcher = None
 timeframe = None
 
-import sys
 try:
     with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f)
@@ -92,19 +92,7 @@ try:
     timeframe = config['trading']['timeframe']
     data_fetcher = DataFetcher()
 except Exception as e:
-    # Fallback: versuche Telegram-Alert, falls data_fetcher schon existiert
-    try:
-        if data_fetcher and hasattr(data_fetcher, 'save_log'):
-            data_fetcher.save_log(LOG_ERROR, MAIN, INIT, f'Fehler beim Laden der Config/DataFetcher: {e}', str(uuid.uuid4()))
-        # Telegram-Alert, falls DataFetcher schon geladen
-        if data_fetcher and hasattr(data_fetcher, 'telegram_token') and hasattr(data_fetcher, 'telegram_chat_id'):
-            import requests
-            if data_fetcher.telegram_token and data_fetcher.telegram_chat_id:
-                url = f"https://api.telegram.org/bot{data_fetcher.telegram_token}/sendMessage"
-                msg = f"[CRITICAL] Fehler beim Laden der Config/DataFetcher: {e}"
-                requests.post(url, data={"chat_id": data_fetcher.telegram_chat_id, "text": msg})
-    except Exception:
-        pass
+    send_message(f"Error loading config: {e}")
     sys.exit(1)
 
 # Dynamisches Limit aus Strategie-Parametern (price_change_periods) nur einmalig auslesen
@@ -116,6 +104,7 @@ try:
     price_change_periods = int(params.get('price_change_periods', 20))
 except Exception:
     price_change_periods = 20
+    send_message(f"Error loading strategy config: {e}")
 
 # Symbollisten für Spot (Long) und Futures (Short) aus der Datenbank (nur selected)
 
@@ -148,7 +137,6 @@ try:
         strategy_cfg = yaml.safe_load(f)
 except Exception:
     strategy_cfg = {}
-
 
 # Trader-Instanzen pro Symbol und Typ, strategy_cfg wird übergeben
 spot_traders = {symbol: SpotLongTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in spot_symbols}
@@ -216,5 +204,8 @@ while True:
 
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f'Loop fertig', transaction_id)
     except Exception as e:
+        import traceback
+        print(f"[MAIN LOOP ERROR] {e}")
+        print(traceback.format_exc())
         data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Error: {e}", transaction_id)
         send_message(f"Error in main loop: {e}", transaction_id)
