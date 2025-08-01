@@ -68,6 +68,23 @@ def format_startup_message(config):
     )
     return msg
 
+# --- Symbol-Konvertierung DB -> ccxt ---
+def symbol_db_to_ccxt(symbol, all_db_symbols=None):
+    """Konvertiert z.B. BTCUSDT -> BTC/USDT, Quotes werden dynamisch aus allen DB-Symbolen extrahiert."""
+    if all_db_symbols is None:
+        all_db_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type=None)]
+    quotes = set()
+    for s in all_db_symbols:
+        for i in range(3, min(6, len(s))):
+            quote = s[-i:]
+            quotes.add(quote)
+    quotes = sorted(quotes, key=lambda x: -len(x))
+    for quote in quotes:
+        if symbol.endswith(quote):
+            base = symbol[:-len(quote)]
+            return f"{base}/{quote}"
+    return symbol
+
 # --- Initialisierung ---
 
 def resolve_env_vars(obj):
@@ -106,77 +123,54 @@ except Exception:
     price_change_periods = 20
     send_message(f"Error loading strategy config: {e}")
 
-# Symbollisten für Spot (Long) und Futures (Short) aus der Datenbank (nur selected)
-
-# --- Symbol-Filter: Nur liquide und volatile Märkte ---
-# Hole alle Symbole
-spot_symbols_all = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="spot")]
-futures_symbols_all = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="futures")]
-
-# --- Symbol-Filter: Nur liquide und volatile Märkte ---
-tickers = fetch_binance_tickers()
-
-spot_symbols_liquid = filter_by_volume(spot_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
-futures_symbols_liquid = filter_by_volume(futures_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
-
-spot_symbols = sorted(spot_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
-futures_symbols = sorted(futures_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
-
-data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Spot-Symbole nach Volumen/Volatilität gefiltert: {spot_symbols}", str(uuid.uuid4()))
-data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Symbole nach Volumen/Volatilität gefiltert: {futures_symbols}", str(uuid.uuid4()))
-
-# Strategie-Instanzen für beide Typen
-strategies = get_strategy(config)
-data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Strategien geladen: {list(strategies.keys())}", str(uuid.uuid4()))
-spot_strategy = strategies['spot_long']
-futures_strategy = strategies['futures_short']
-
-# Strategie-Konfiguration nur einmal laden
-try:
-    with open(STRATEGY_PATH, encoding="utf-8") as f:
-        strategy_cfg = yaml.safe_load(f)
-except Exception:
-    strategy_cfg = {}
-
-# Trader-Instanzen pro Symbol und Typ, strategy_cfg wird übergeben
-spot_traders = {symbol: SpotLongTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in spot_symbols}
-data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Spot-Trader Instanzen: {list(spot_traders.keys())}", str(uuid.uuid4()))
-futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in futures_symbols}
-data_fetcher.save_log(LOG_INFO, MAIN, INIT, f"Futures-Trader Instanzen: {list(futures_traders.keys())}", str(uuid.uuid4()))
-
 startup_msg = format_startup_message(config)
 send_message(startup_msg)
 
-# Lade offene Trades für alle Trader (Spot-Long und Futures-Short)
-for trader in spot_traders.values():
-    trader.load_last_open_trade('long', 'spot')
-for trader in futures_traders.values():
-    trader.load_last_open_trade('short', 'futures')
-
+main_loop_active = True
 # --- Hauptloop ---
-while True:
+while main_loop_active:
     transaction_id = str(uuid.uuid4())
     try:
         # Alle 12h Symbol-Update von Binance (und beim Start):
+        # Initialisiere/aktualisiere alles beim Start und alle 12h
         if not hasattr(data_fetcher, '_last_symbol_update') or (time.time() - getattr(data_fetcher, '_last_symbol_update', 0)) > 43200:
             data_fetcher.update_symbols_from_binance()
             data_fetcher._last_symbol_update = time.time()
 
-            # Symbollisten neu laden
-            spot_symbols_all = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="spot")]
-            futures_symbols_all = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type="futures")]
-            # Ticker neu laden
+            # Symbollisten neu laden und filtern
+            all_db_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type=None)]
+            spot_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="spot")]
+            futures_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="futures")]
+            print("DB Spot-Symbole:", spot_symbols_all)
             tickers = fetch_binance_tickers()
-            # Filterung neu durchführen
+            print("Ticker-Keys:", list(tickers.keys())[:10])
             spot_symbols_liquid = filter_by_volume(spot_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
+            print("Spot-Symbole nach Volumen:", spot_symbols_liquid)
             futures_symbols_liquid = filter_by_volume(futures_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
             spot_symbols = sorted(spot_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
             futures_symbols = sorted(futures_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
             data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Spot-Symbole nach Volumen/Volatilität gefiltert (Update): {spot_symbols}", transaction_id)
             data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Futures-Symbole nach Volumen/Volatilität gefiltert (Update): {futures_symbols}", transaction_id)
+
+            # Strategie-Konfiguration und Instanzen neu laden
+            try:
+                with open(STRATEGY_PATH, encoding="utf-8") as f:
+                    strategy_cfg = yaml.safe_load(f)
+            except Exception:
+                strategy_cfg = {}
+            strategies = get_strategy(config)
+            spot_strategy = strategies['spot_long']
+            futures_strategy = strategies['futures_short']
+
             # Trader-Instanzen neu erstellen
             spot_traders = {symbol: SpotLongTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in spot_symbols}
             futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher=data_fetcher, strategy_config=strategy_cfg) for symbol in futures_symbols}
+
+            # Lade offene Trades für alle Trader
+            for trader in spot_traders.values():
+                trader.load_last_open_trade('long', 'spot')
+            for trader in futures_traders.values():
+                trader.load_last_open_trade('short', 'futures')
 
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, '--- Starte neuen Loop ---', transaction_id)
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"spot_symbols: {spot_symbols}", transaction_id)
@@ -184,10 +178,20 @@ while True:
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"spot_traders: {list(spot_traders.keys())}", transaction_id)
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"futures_traders: {list(futures_traders.keys())}", transaction_id)
 
+        # Check auf leere Symbol-Listen
+        if not spot_symbols:
+            import traceback
+            print("[ERROR] spot_symbols ist leer!")
+            raise Exception("spot_symbols ist leer!\n" + traceback.format_stack().__str__())
+        if not futures_symbols:
+            import traceback
+            print("[ERROR] futures_symbols ist leer!")
+            raise Exception("futures_symbols ist leer!\n" + traceback.format_stack().__str__())
+
         # Aktualisiere Spot-OHLCV-Daten und übergebe die gesamte Liste an SpotLongTrader.handle_trades
         spot_ohlcv_list = data_fetcher.fetch_ohlcv(spot_symbols, market_type='spot', timeframe=timeframe, transaction_id=transaction_id, limit=price_change_periods + 15)
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"spot_ohlcv_list len: {len(spot_ohlcv_list) if spot_ohlcv_list is not None else 'None'}", transaction_id)
-        if spot_traders:
+        if spot_traders:    
             for symbol, trader in spot_traders.items():
                 open_trade_status = f"{trader.open_trade}" if trader.open_trade else "None"
                 data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, f"SpotTrader {symbol} open_trade: {open_trade_status}", transaction_id)
@@ -209,3 +213,4 @@ while True:
         print(traceback.format_exc())
         data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Error: {e}", transaction_id)
         send_message(f"Error in main loop: {e}", transaction_id)
+        main_loop_active = False
