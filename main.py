@@ -71,14 +71,11 @@ def format_startup_message(config):
 # --- Symbol-Konvertierung DB -> ccxt ---
 def symbol_db_to_ccxt(symbol, all_db_symbols=None):
     """Konvertiert z.B. BTCUSDT -> BTC/USDT, Quotes werden dynamisch aus allen DB-Symbolen extrahiert."""
-    if all_db_symbols is None:
-        all_db_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type=None)]
-    quotes = set()
-    for s in all_db_symbols:
-        for i in range(3, min(6, len(s))):
-            quote = s[-i:]
-            quotes.add(quote)
+    # Use only real quote assets from DB
+    quotes = set(row['quote_asset'] for row in data_fetcher.get_all_symbols(symbol_type=None) if 'quote_asset' in row and row['quote_asset'])
     quotes = sorted(quotes, key=lambda x: -len(x))
+    if '/' in symbol:
+        return symbol
     for quote in quotes:
         if symbol.endswith(quote):
             base = symbol[:-len(quote)]
@@ -123,9 +120,6 @@ except Exception:
     price_change_periods = 20
     send_message(f"Error loading strategy config: {e}")
 
-startup_msg = format_startup_message(config)
-send_message(startup_msg)
-
 main_loop_active = True
 # --- Hauptloop ---
 while main_loop_active:
@@ -134,6 +128,9 @@ while main_loop_active:
         # Alle 12h Symbol-Update von Binance (und beim Start):
         # Initialisiere/aktualisiere alles beim Start und alle 12h
         if not hasattr(data_fetcher, '_last_symbol_update') or (time.time() - getattr(data_fetcher, '_last_symbol_update', 0)) > 43200:
+            startup_msg = format_startup_message(config)
+            send_message(startup_msg)
+
             data_fetcher.update_symbols_from_binance()
             data_fetcher._last_symbol_update = time.time()
 
@@ -141,16 +138,16 @@ while main_loop_active:
             all_db_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type=None)]
             spot_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="spot")]
             futures_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="futures")]
-            print("DB Spot-Symbole:", spot_symbols_all)
             tickers = fetch_binance_tickers()
-            print("Ticker-Keys:", list(tickers.keys())[:10])
             spot_symbols_liquid = filter_by_volume(spot_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
-            print("Spot-Symbole nach Volumen:", spot_symbols_liquid)
             futures_symbols_liquid = filter_by_volume(futures_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
             spot_symbols = sorted(spot_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
             futures_symbols = sorted(futures_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
             data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Spot-Symbole nach Volumen/Volatilität gefiltert (Update): {spot_symbols}", transaction_id)
             data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Futures-Symbole nach Volumen/Volatilität gefiltert (Update): {futures_symbols}", transaction_id)
+            # Logge die Anzahl und die Liste der tatsächlich gehandelten Symbole
+            data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Spot-Symbole gehandelt: {len(spot_symbols)} -> {spot_symbols}", transaction_id)
+            data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Futures-Symbole gehandelt: {len(futures_symbols)} -> {futures_symbols}", transaction_id)
 
             # Strategie-Konfiguration und Instanzen neu laden
             try:
