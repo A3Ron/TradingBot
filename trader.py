@@ -3,8 +3,10 @@
 import ccxt
 import os
 import pandas as pd
+import traceback
 import uuid
 from typing import Optional, Dict, Any, Callable
+
 from data import DataFetcher
 from telegram import send_message
 
@@ -98,7 +100,20 @@ class BaseTrader:
             send_message(f"Order failed: {self.symbol} {self.side} {volume}\nError: {e}")
             return None
 
-    def monitor_trade(self, df, tx_id: str, exit_price: float, exit_condition: Callable[[float], bool], close_fn: Callable[[float], Any]) -> Optional[str]:
+    def fetch_short_position_volume(self, tx_id: str) -> float:
+        try:
+            positions = self.exchange.fetch_positions([self.symbol])
+            for pos in positions:
+                if pos.get('symbol') == self.symbol:
+                    amt = pos.get('contracts') or pos.get('positionAmt')
+                    if amt and float(amt) < 0:
+                        return abs(float(amt))
+            self._log(LOG_WARN, 'fetch_short_position_volume', f"No open short position found for {self.symbol}.", tx_id)
+        except Exception as e:
+            self._log(LOG_ERROR, 'fetch_short_position_volume', f"Error fetching positions: {e}", tx_id)
+        return 0.0
+
+    def monitor_trade(self, df, tx_id: str, exit_condition: Callable[[float], bool], close_fn: Callable[[float], Any], fetch_position_fn: Optional[Callable[[], float]] = None) -> Optional[str]:
         if not self.open_trade:
             return None
 
@@ -106,7 +121,7 @@ class BaseTrader:
         current_price = df['close'].iloc[-1]
 
         if exit_condition(current_price):
-            volume = self.open_trade.get('trade_volume') or signal.volume
+            volume = fetch_position_fn() if fetch_position_fn else self.open_trade.get('trade_volume') or signal.volume
             volume = self.round_volume(volume)
             try:
                 close_fn(volume)
@@ -153,3 +168,6 @@ class FuturesShortTrader(BaseTrader):
 
     def close_fn(self, volume):
         return self.exchange.create_market_buy_order(self.symbol, volume, {'reduceOnly': True})
+
+    def get_current_position_volume(self):
+        return self.fetch_short_position_volume(str(uuid.uuid4()))
