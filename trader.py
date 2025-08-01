@@ -674,10 +674,13 @@ class SpotLongTrader(BaseTrader):
             notional = volume_to_sell * entry_price
             pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
             pnl_usd = (current_price - entry_price) * volume_to_sell if entry_price else 0.0
-            msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | RSI < {getattr(strategy, 'momentum_exit_rsi', 50)} | Vol: {volume_to_sell} | Preis: {current_price} | "
+            rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else None
+            exit_reason = "Momentum-Exit: RSI unter Schwelle"
+            msg = (f"[SPOT-LONG EXIT] {self.symbol} | {exit_reason} | Preis: {current_price} | Vol: {volume_to_sell} | RSI: {rsi} | "
                    f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
-            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Momentum-Exit: Symbol={self.symbol}, VolToSell={volume_to_sell}, minQty={min_qty}, Price={current_price}", transaction_id)
+            send_message(msg)
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Momentum-Exit: Symbol={self.symbol}, VolToSell={volume_to_sell}, minQty={min_qty}, Price={current_price}, RSI={rsi}", transaction_id)
             # Step 1: Check available balance again
             try:
                 balance = self.exchange.fetch_balance()
@@ -695,9 +698,10 @@ class SpotLongTrader(BaseTrader):
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"[DEBUG] Step2: Fehler beim minQty-Check: {e}", transaction_id)
                 min_qty_check = min_qty
             # Step 3: Log all relevant context before order
-            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step3: Momentum-Exit Order-Context: Symbol={self.symbol}, VolToSell={available}, minQty={min_qty_check}, Price={current_price}", transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step3: Momentum-Exit Order-Context: Symbol={self.symbol}, VolToSell={available}, minQty={min_qty_check}, Price={current_price}, RSI={rsi}", transaction_id)
             if available < min_qty_check or available == 0.0:
-                msg = (f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit | Volumen zu klein | Vol: {available} < minQty: {min_qty_check} | Preis: {current_price} | "
+                exit_reason = "Momentum-Exit: Volumen zu klein"
+                msg = (f"[SPOT-LONG EXIT] {self.symbol} | {exit_reason} | Vol: {available} < minQty: {min_qty_check} | Preis: {current_price} | RSI: {rsi} | "
                        f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Trade wird als geschlossen markiert.")
                 self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
                 send_message(msg)
@@ -708,11 +712,15 @@ class SpotLongTrader(BaseTrader):
                 order = self.exchange.create_order(
                     self.symbol, 'MARKET', 'SELL', available
                 )
-                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"[SPOT-LONG EXIT] {self.symbol} | Momentum-Exit SELL ausgeführt | Order: {order}", transaction_id)
+                exit_reason = "Momentum-Exit: SELL ausgeführt"
+                msg = (f"[SPOT-LONG EXIT] {self.symbol} | {exit_reason} | Preis: {current_price} | Vol: {available} | RSI: {rsi} | "
+                       f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Order: {order}")
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
+                send_message(msg)
                 self.close_trade('spot', 'long', available, current_price, 'momentum_exit', transaction_id)
                 return "momentum_exit"
             except Exception as e:
-                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Momentum-Exit SELL: {e} | Vol: {available} | Preis: {current_price}\n{traceback.format_exc()}")
+                err_msg = (f"[SPOT-LONG EXIT] {self.symbol} | Fehler beim Momentum-Exit SELL: {e} | Vol: {available} | Preis: {current_price} | RSI: {rsi}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
                 send_message(err_msg, transaction_id)
                 # Step 5: Log error and do not mark as closed
@@ -984,10 +992,13 @@ class FuturesShortTrader(BaseTrader):
             notional = position_amt * entry_price
             pnl_pct = ((entry_price - current_price) / entry_price * 100) if entry_price else 0.0
             pnl_usd = (entry_price - current_price) * position_amt if entry_price else 0.0
-            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | RSI > {getattr(strategy, 'momentum_exit_rsi', 50)} | PosAmt: {position_amt} | Preis: {current_price} | "
+            rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else None
+            exit_reason = "Momentum-Exit: RSI über Schwelle"
+            msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | {exit_reason} | Preis: {current_price} | Vol: {position_amt} | RSI: {rsi} | "
                    f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD")
             self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
-            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Momentum-Exit: Symbol={self.symbol}, PosAmt={position_amt}, Price={current_price}", transaction_id)
+            send_message(msg)
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Momentum-Exit: Symbol={self.symbol}, PosAmt={position_amt}, Price={current_price}, RSI={rsi}", transaction_id)
             # Step 1: Check open position again
             try:
                 positions = self.exchange.fetch_positions([self.symbol])
@@ -1005,9 +1016,10 @@ class FuturesShortTrader(BaseTrader):
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', f"[DEBUG] Step1: Fehler beim Positions-Check: {e}", transaction_id)
                 position_amt_check = position_amt
             # Step 2: Log all relevant context before order
-            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step2: Momentum-Exit Order-Context: Symbol={self.symbol}, PosAmt={position_amt_check}, Price={current_price}", transaction_id)
+            self.data.save_log(LOG_DEBUG, 'trader', 'monitor_trade', f"[DEBUG] Step2: Momentum-Exit Order-Context: Symbol={self.symbol}, PosAmt={position_amt_check}, Price={current_price}, RSI={rsi}", transaction_id)
             if position_amt_check == 0.0:
-                msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit | Keine offene Short-Position zum Schließen | Preis: {current_price} | "
+                exit_reason = "Momentum-Exit: Keine offene Short-Position zum Schließen"
+                msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | {exit_reason} | Preis: {current_price} | Vol: {position_amt_check} | RSI: {rsi} | "
                        f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Trade wird als geschlossen markiert.")
                 self.data.save_log(LOG_WARN, 'trader', 'monitor_trade', msg, transaction_id)
                 send_message(msg)
@@ -1016,11 +1028,15 @@ class FuturesShortTrader(BaseTrader):
             # Step 3: Try to close position
             try:
                 self.exchange.create_market_buy_order(self.symbol, position_amt_check, params={"reduceOnly": True})
-                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', f"[FUTURES-SHORT EXIT] {self.symbol} | Momentum-Exit BUY (close short) ausgeführt | PosAmt: {position_amt_check}", transaction_id)
+                exit_reason = "Momentum-Exit: BUY ausgeführt"
+                msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | {exit_reason} | Preis: {current_price} | Vol: {position_amt_check} | RSI: {rsi} | "
+                       f"Notional: {notional:.2f} USD | PnL: {pnl_pct:.2f}% | PnL: {pnl_usd:.2f} USD | Position geschlossen.")
+                self.data.save_log(LOG_INFO, 'trader', 'monitor_trade', msg, transaction_id)
+                send_message(msg)
                 self.close_trade('futures', 'short', position_amt_check, current_price, 'momentum_exit', transaction_id)
                 return "momentum_exit"
             except Exception as e:
-                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Momentum-Exit BUY: {e} | PosAmt: {position_amt_check} | Preis: {current_price}\n{traceback.format_exc()}")
+                err_msg = (f"[FUTURES-SHORT EXIT] {self.symbol} | Fehler beim Momentum-Exit BUY: {e} | Vol: {position_amt_check} | Preis: {current_price} | RSI: {rsi}\n{traceback.format_exc()}")
                 self.data.save_log(LOG_ERROR, 'trader', 'monitor_trade', err_msg, transaction_id)
                 send_message(err_msg, transaction_id)
                 # Step 4: Log error and do not mark as closed
