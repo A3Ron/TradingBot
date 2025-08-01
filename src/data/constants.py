@@ -1,0 +1,10 @@
+LOG_DEBUG = 'DEBUG'
+LOG_INFO = 'INFO'
+LOG_WARN = 'WARNING'
+LOG_ERROR = 'ERROR'
+SPOT = 'spot'
+FUTURES = 'futures'
+LONG = 'long'
+SHORT = 'short'
+DATA = "data"
+MIN_VOLUME_USD = 50_000_000

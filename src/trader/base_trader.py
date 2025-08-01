@@ -1,23 +1,11 @@
-### trader_refactored.py
-
-import ccxt
 import os
-import pandas as pd
-import traceback
 import uuid
 from typing import Optional, Dict, Any, Callable
-
 from data import DataFetcher
 from telegram import send_message
-
-SPOT = 'spot'
-FUTURES = 'futures'
-LONG = 'long'
-SHORT = 'short'
-LOG_DEBUG = 'DEBUG'
-LOG_INFO = 'INFO'
-LOG_WARN = 'WARNING'
-LOG_ERROR = 'ERROR'
+from data.constants import (
+    LOG_INFO, LOG_WARN, LOG_ERROR
+)
 
 class BaseTrader:
     def __init__(self, config: dict, symbol: str, market_type: str, side: str,
@@ -80,6 +68,7 @@ class BaseTrader:
                 trade['signal'] = self._dict_to_obj(trade['signal'])
             self.open_trade = trade
         else:
+            self._log(LOG_INFO, 'load_open_trade', f"No open trade found for {self.symbol} ({self.side})", tx_id)
             self.open_trade = None
 
     def execute_trade(self, signal, tx_id: str, entry_fn: Callable[[float], Any]) -> Optional[Dict[str, Any]]:
@@ -133,41 +122,3 @@ class BaseTrader:
                 self._log(LOG_ERROR, 'monitor_trade', f"Failed to close: {e}", tx_id)
                 send_message(f"Failed to close {self.symbol}: {e}")
         return None
-
-class SpotLongTrader(BaseTrader):
-    def __init__(self, config, symbol, data_fetcher=None, exchange=None, strategy_config=None):
-        super().__init__(config, symbol, SPOT, LONG, data_fetcher, exchange, strategy_config)
-        if not self.exchange:
-            self.exchange = ccxt.binance({
-                'apiKey': os.getenv('BINANCE_API_KEY'),
-                'secret': os.getenv('BINANCE_API_SECRET'),
-                'enableRateLimit': True,
-                'options': {'defaultType': 'spot'}
-            })
-
-    def entry_fn(self, volume):
-        price = self.exchange.fetch_ticker(self.symbol).get('last')
-        return self.exchange.create_order(self.symbol, 'MARKET', 'BUY', None, None, {'quoteOrderQty': price * volume})
-
-    def close_fn(self, volume):
-        return self.exchange.create_order(self.symbol, 'MARKET', 'SELL', volume)
-
-class FuturesShortTrader(BaseTrader):
-    def __init__(self, config, symbol, data_fetcher=None, exchange=None, strategy_config=None):
-        super().__init__(config, symbol, FUTURES, SHORT, data_fetcher, exchange, strategy_config)
-        if not self.exchange:
-            self.exchange = ccxt.binance({
-                'apiKey': os.getenv('BINANCE_API_KEY'),
-                'secret': os.getenv('BINANCE_API_SECRET'),
-                'enableRateLimit': True,
-                'options': {'defaultType': 'future'}
-            })
-
-    def entry_fn(self, volume):
-        return self.exchange.create_market_sell_order(self.symbol, volume, {'reduceOnly': False})
-
-    def close_fn(self, volume):
-        return self.exchange.create_market_buy_order(self.symbol, volume, {'reduceOnly': True})
-
-    def get_current_position_volume(self):
-        return self.fetch_short_position_volume(str(uuid.uuid4()))
