@@ -21,6 +21,7 @@ MAIN = "main"
 INIT = "init"
 MAIN_LOOP = "main_loop"
 TOP_N = 50  # z.B. Top 50 volatilste
+BLACKLIST = ['USDC/USDT', 'FDUSD/USDT', 'PAXG/USDT', 'WBTC/USDT', 'WBETH/USDT']
 
 # --- Funktionen ---
 def format_startup_message(config):
@@ -141,8 +142,11 @@ while main_loop_active:
             tickers = fetch_binance_tickers()
             spot_symbols_liquid = filter_by_volume(spot_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
             futures_symbols_liquid = filter_by_volume(futures_symbols_all, tickers, min_volume_usd=MIN_VOLUME_USD)
-            spot_symbols = sorted(spot_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
-            futures_symbols = sorted(futures_symbols_liquid, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
+            # Blacklist-Filter anwenden
+            spot_symbols_filtered = [s for s in spot_symbols_liquid if s not in BLACKLIST]
+            futures_symbols_filtered = [s for s in futures_symbols_liquid if s not in BLACKLIST]
+            spot_symbols = sorted(spot_symbols_filtered, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
+            futures_symbols = sorted(futures_symbols_filtered, key=lambda s: get_volatility(s, tickers), reverse=True)[:TOP_N]
             data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Spot-Symbole nach Volumen/Volatilität gefiltert (Update): {spot_symbols}", transaction_id)
             data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Futures-Symbole nach Volumen/Volatilität gefiltert (Update): {futures_symbols}", transaction_id)
             # Logge die Anzahl und die Liste der tatsächlich gehandelten Symbole

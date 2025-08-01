@@ -90,8 +90,8 @@ def create_tables(engine):
 create_tables(pg_engine)
 
 # --- Symbol-Filter-Utilities ---
-# Mindestvolumen-Filter (z.B. 1 Mio USD)
-MIN_VOLUME_USD = 1_000_000
+# Mindestvolumen-Filter (z.B. 50 Mio USD)
+MIN_VOLUME_USD = 50_000_000
 def to_ccxt_symbol(base_asset, quote_asset):
     """Erzeugt das ccxt-Symbolformat (z.B. BTC/USDT) aus base_asset und quote_asset."""
     return f"{base_asset}/{quote_asset}"
@@ -427,10 +427,15 @@ class DataFetcher:
             symbol = trade_data.get('symbol')
             if not symbol:
                 raise ValueError("symbol muss im trade_data vorhanden sein!")
+            # Konvertiere ggf. von 'BASE/QUOTE' zu 'BASEQUOTE'
+            if '/' in symbol:
+                symbol_db = symbol.replace('/', '')
+            else:
+                symbol_db = symbol
             sym_table = self.get_symbols_table()
-            res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol)).fetchone()
+            res = session.execute(sym_table.select().where(sym_table.c.symbol == symbol_db)).fetchone()
             if not res:
-                raise ValueError(f"Symbol {symbol} nicht in symbols-Tabelle gefunden!")
+                raise ValueError(f"Symbol {symbol} (DB: {symbol_db}) nicht in symbols-Tabelle gefunden!")
             trade_data['symbol_id'] = res.id
             if 'symbol' in trade_data:
                 del trade_data['symbol']
