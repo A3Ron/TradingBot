@@ -5,9 +5,9 @@ import time
 import re
 import sys
 from dotenv import load_dotenv
+from data.constants import LOG_DEBUG, LOG_ERROR, LOG_INFO
 from .data import (
-    DataFetcher, filter_by_volume, get_volatility,
-    fetch_binance_tickers
+    DataFetcher, filter_by_volume, get_volatility, fetch_binance_tickers
 )
 from .telegram import send_message
 from .trader import SpotLongTrader, FuturesShortTrader
@@ -16,10 +16,6 @@ from .strategy import get_strategy
 # --- Konstanten ---
 CONFIG_PATH = 'config.yaml'
 STRATEGY_PATH = 'strategy_high_volatility_breakout_momentum.yaml'
-LOG_DEBUG = "DEBUG"
-LOG_INFO = "INFO"
-LOG_WARNING = "WARNING"
-LOG_ERROR = "ERROR"
 MAIN = "main"
 MAIN_LOOP = "main_loop"
 TOP_N = 50
@@ -150,11 +146,6 @@ while main_loop_active:
             symbol: FuturesShortTrader(config, symbol, data_fetcher, strategy_cfg)
             for symbol in futures_symbols
         }
-
-        for trader in spot_traders.values():
-            trader.load_last_open_trade('long', 'spot')
-        for trader in futures_traders.values():
-            trader.load_last_open_trade('short', 'futures')
 
         spot_ohlcv = data_fetcher.fetch_ohlcv(spot_symbols, 'spot', timeframe, transaction_id, price_change_periods + 15)
         futures_ohlcv = data_fetcher.fetch_ohlcv(futures_symbols, 'futures', timeframe, transaction_id, price_change_periods + 15)

@@ -1,7 +1,8 @@
 import os
 import uuid
 import ccxt
-from trader import FUTURES, SHORT, BaseTrader
+from trader import BaseTrader
+from ..data.constants import FUTURES, SHORT
 
 
 class FuturesShortTrader(BaseTrader):

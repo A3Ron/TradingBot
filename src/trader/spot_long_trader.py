@@ -1,6 +1,7 @@
 import os
 import ccxt
-from trader import LONG, SPOT, BaseTrader
+from trader import BaseTrader
+from ..data.constants import SPOT, LONG
 
 
 class SpotLongTrader(BaseTrader):
