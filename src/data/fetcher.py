@@ -1,12 +1,13 @@
-import datetime
 from symtable import Symbol
+import traceback
+import uuid
 import ccxt
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import text, DateTime
 
+from models.trade import Trade
 from telegram import send_message
-from .db import get_session
-from .logger import save_log
+from data import get_session, save_log
 
 class DataFetcher:
     def __init__(self):
@@ -26,7 +27,7 @@ class DataFetcher:
         finally:
             session.close()
 
-    def fetch_ohlcv(symbols, market_type, timeframe, transaction_id, limit):
+    def fetch_ohlcv(self, symbols, market_type, timeframe, transaction_id, limit):
         """
         Lädt OHLCV-Daten von Binance für eine Liste von Symbolen.
         Gibt eine Liste von DataFrames mit OHLCV-Daten pro Symbol zurück.
@@ -37,7 +38,6 @@ class DataFetcher:
         })
 
         ohlcv_list = []
-        fetcher = DataFetcher()
 
         for symbol in symbols:
             try:
@@ -47,17 +47,33 @@ class DataFetcher:
                 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
                 ohlcv_list.append(df)
             except Exception as e:
-                fetcher.save_log("ERROR", "binance", "fetch_ohlcv", f"Fehler bei {symbol}: {e}", transaction_id)
+                self.save_log("ERROR", "fetcher", "fetch_ohlcv", f"Fehler bei {symbol}: {e}", transaction_id)
                 send_message(f"❌ Fehler beim Laden von OHLCV für {symbol}: {e}", transaction_id)
-            continue
+                continue
 
         return ohlcv_list
 
-    def fetch_binance_tickers(self):
-        binance = ccxt.binance()
-        return binance.fetch_tickers()
-    
-    def update_symbols_from_binance():
+    def fetch_binance_tickers(self, transaction_id: str = None) -> dict:
+        """
+        Holt alle 24h-Ticker von Binance via ccxt und gibt ein Dict zurück.
+        :param transaction_id: Optional – für Logging, sonst wird generiert
+        :return: Dict der Ticker-Daten, z. B. {'BTC/USDT': {...}, ...}
+        """
+        transaction_id = transaction_id or str(uuid.uuid4())
+
+        try:
+            binance = ccxt.binance()
+            tickers = binance.fetch_tickers()
+            if not isinstance(tickers, dict) or len(tickers) == 0:
+                raise ValueError("fetch_tickers hat keine gültigen Daten zurückgegeben")
+            return tickers
+        except Exception as e:
+            msg = f"Fehler beim Abrufen der Binance-Ticker: {e}\n{traceback.format_exc()}"
+            self.save_log("ERROR", "fetcher", "fetch_binance_tickers", msg, transaction_id)
+            send_message(msg, transaction_id)
+            return {}
+
+    def update_symbols_from_binance(self):
         """
         Ruft aktuelle Symbole von Binance ab (Spot und Futures) und aktualisiert die DB.
         """
@@ -73,7 +89,7 @@ class DataFetcher:
         with get_session() as session:
             session.query(Symbol).delete()
 
-            now = datetime.datetime.now(datetime.timezone.utc)
+            now = DateTime.utcnow()
 
             for market in spot_markets.values():
                 if market.get("active") and market.get("quote") == "USDT":
@@ -101,4 +117,14 @@ class DataFetcher:
 
             session.commit()
 
-        return now.timestamp()
+        self._last_symbol_update = now.timestamp()
+        return self._last_symbol_update
+
+    def get_last_open_trade(self, symbol: str, side: str, market_type: str):
+        with get_session() as session:
+            return session.query(Trade).filter_by(
+                symbol=symbol,
+                side=side,
+                market_type=market_type,
+                status="open"
+            ).order_by(Trade.timestamp.desc()).first()
