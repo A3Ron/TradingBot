@@ -1,7 +1,7 @@
 import os
 import uuid
 from typing import Optional, Dict, Any, Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from data import DataFetcher
 from telegram import send_message
