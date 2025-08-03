@@ -10,6 +10,7 @@ from models.symbol import Symbol
 from telegram import send_message
 from data import get_session, save_log
 
+
 class DataFetcher:
     def __init__(self):
         self._last_symbol_update = 0
@@ -29,10 +30,6 @@ class DataFetcher:
             session.close()
 
     def fetch_ohlcv(self, symbols, market_type, timeframe, transaction_id, limit):
-        """
-        Lädt OHLCV-Daten von Binance für eine Liste von Symbolen.
-        Gibt eine Liste von DataFrames mit OHLCV-Daten pro Symbol zurück.
-        """
         exchange = ccxt.binance({
             "enableRateLimit": True,
             "options": {"defaultType": market_type}
@@ -50,16 +47,10 @@ class DataFetcher:
             except Exception as e:
                 self.save_log("ERROR", "fetcher", "fetch_ohlcv", f"Fehler bei {symbol}: {e}", transaction_id)
                 send_message(f"❌ Fehler beim Laden von OHLCV für {symbol}: {e}", transaction_id)
-                continue
 
         return ohlcv_list
 
     def fetch_binance_tickers(self, transaction_id: str = None) -> dict:
-        """
-        Holt alle 24h-Ticker von Binance via ccxt und gibt ein Dict zurück.
-        :param transaction_id: Optional – für Logging, sonst wird generiert
-        :return: Dict der Ticker-Daten, z. B. {'BTC/USDT': {...}, ...}
-        """
         transaction_id = transaction_id or str(uuid.uuid4())
 
         try:
@@ -75,9 +66,6 @@ class DataFetcher:
             return {}
 
     def update_symbols_from_binance(self):
-        """
-        Ruft aktuelle Symbole von Binance ab (Spot und Futures) und aktualisiert die DB.
-        """
         exchange_spot = ccxt.binance({"enableRateLimit": True})
         exchange_futures = ccxt.binance({
             "enableRateLimit": True,
@@ -89,32 +77,35 @@ class DataFetcher:
 
         with get_session() as session:
             session.query(Symbol).delete()
-
             now = datetime.now(timezone.utc)
+
+            def build_symbol(market, market_type):
+                return Symbol(
+                    symbol_type=market_type,
+                    symbol=market.get("symbol"),
+                    base_asset=market.get("base"),
+                    quote_asset=market.get("quote"),
+                    min_qty=market.get("limits", {}).get("amount", {}).get("min"),
+                    step_size=market.get("precision", {}).get("amount"),
+                    min_notional=market.get("limits", {}).get("cost", {}).get("min"),
+                    tick_size=market.get("precision", {}).get("price"),
+                    status=market.get("status"),
+                    is_spot_trading_allowed=market.get("spot"),
+                    is_margin_trading_allowed=market.get("margin"),
+                    contract_type=market.get("info", {}).get("contractType"),
+                    leverage=market.get("info", {}).get("leverage"),
+                    exchange="binance",
+                    created_at=now,
+                    updated_at=now
+                )
 
             for market in spot_markets.values():
                 if market.get("active") and market.get("quote") == "USDT":
-                    symbol = Symbol(
-                        symbol_type="spot",
-                        symbol=market["symbol"],
-                        base_asset=market["base"],
-                        quote_asset=market["quote"],
-                        created_at=now,
-                        updated_at=now,
-                    )
-                    session.add(symbol)
+                    session.add(build_symbol(market, "spot"))
 
             for market in futures_markets.values():
                 if market.get("active") and market.get("quote") == "USDT":
-                    symbol = Symbol(
-                        symbol_type="futures",
-                        symbol=market["symbol"],
-                        base_asset=market["base"],
-                        quote_asset=market["quote"],
-                        created_at=now,
-                        updated_at=now,
-                    )
-                    session.add(symbol)
+                    session.add(build_symbol(market, "futures"))
 
             session.commit()
 
