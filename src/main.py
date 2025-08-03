@@ -19,11 +19,16 @@ CONFIG_PATH = '../config.yaml'
 STRATEGY_PATH = 'strategy/strategy_high_volatility_breakout_momentum.yaml'
 MAIN = "main"
 MAIN_LOOP = "main_loop"
-TOP_N = 50
 BLACKLIST = ['USDC/USDT', 'FDUSD/USDT', 'PAXG/USDT', 'WBTC/USDT', 'WBETH/USDT']
+TOP_N = 50
 MIN_VOLATILITY_PCT = 1.5
 MIN_VOLUME_USD = 50000000
 EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
+SYMBOL_UPDATE_INTERVAL = 43200  # 12 Stunden
+
+last_symbol_update = 0
+startup_sent = False
+
 
 def resolve_env_vars(obj):
     if isinstance(obj, dict):
@@ -33,6 +38,7 @@ def resolve_env_vars(obj):
     elif isinstance(obj, str):
         return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), ""), obj)
     return obj
+
 
 def symbol_db_to_ccxt(symbol, all_db_symbols=None):
     quotes = set(row['quote_asset'] for row in data_fetcher.get_all_symbols(symbol_type=None) if 'quote_asset' in row and row['quote_asset'])
@@ -45,9 +51,8 @@ def symbol_db_to_ccxt(symbol, all_db_symbols=None):
             return f"{base}/{quote}"
     return symbol
 
-def format_startup_message(config):
-    spot_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type='spot')]
-    futures_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type='futures')]
+
+def format_startup_message(config, spot_symbols, futures_symbols):
     init_symbol = spot_symbols[0] if spot_symbols else (futures_symbols[0] if futures_symbols else '')
     try:
         with open(STRATEGY_PATH, encoding="utf-8") as f:
@@ -87,6 +92,7 @@ def format_startup_message(config):
         f"Price Change Periods: {params.get('price_change_periods', '')}\n"
     )
 
+
 # --- Initialisierung ---
 load_dotenv()
 data_fetcher = DataFetcher()
@@ -97,7 +103,7 @@ try:
     config = resolve_env_vars(config)
     timeframe = config['trading']['timeframe']
 except Exception as e:
-    send_message(f"Fehler beim Laden der Config: {e}")
+    send_message(f"Fehler beim Laden der Config: {e}\n{traceback.format_exc()}")
     sys.exit(1)
 
 try:
@@ -106,31 +112,37 @@ try:
     price_change_periods = int(strategy_cfg.get('params', {}).get('price_change_periods', 20))
 except Exception as e:
     price_change_periods = 20
-    send_message(f"Fehler beim Laden der Strategie-Config: {e}")
+    send_message(f"Fehler beim Laden der Strategie-Config: {e}\n{traceback.format_exc()}")
 
 main_loop_active = True
 
 while main_loop_active:
-    send_message(format_startup_message(config))
-    data_fetcher.update_symbols_from_binance()
-    data_fetcher._last_symbol_update = time.time()
-
     transaction_id = str(uuid.uuid4())
 
     try:
+        current_time = time.time()
+        if current_time - last_symbol_update > SYMBOL_UPDATE_INTERVAL:
+            data_fetcher.update_symbols_from_binance()
+            last_symbol_update = current_time
+            startup_sent = False
+
         all_db_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type=None)]
         spot_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="spot")]
         futures_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="futures")]
 
         tickers = data_fetcher.fetch_binance_tickers()
         spot_symbols = sorted(
-            [s for s in filter_by_volume(spot_symbols_all, tickers, MIN_VOLUME_USD) if s not in BLACKLIST],
+            [s for s in filter_by_volume(spot_symbols_all, tickers, MIN_VOLUME_USD) if s not in BLACKLIST and get_volatility(s, tickers) >= MIN_VOLATILITY_PCT],
             key=lambda s: get_volatility(s, tickers), reverse=True
         )[:TOP_N]
         futures_symbols = sorted(
-            [s for s in filter_by_volume(futures_symbols_all, tickers, MIN_VOLUME_USD) if s not in BLACKLIST],
+            [s for s in filter_by_volume(futures_symbols_all, tickers, MIN_VOLUME_USD) if s not in BLACKLIST and get_volatility(s, tickers) >= MIN_VOLATILITY_PCT],
             key=lambda s: get_volatility(s, tickers), reverse=True
         )[:TOP_N]
+
+        if not startup_sent:
+            send_message(format_startup_message(config, spot_symbols, futures_symbols))
+            startup_sent = True
 
         strategies = get_strategy(config)
         spot_strategy = strategies['spot_long']
@@ -163,11 +175,9 @@ while main_loop_active:
 
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Loop abgeschlossen', transaction_id)
 
-        time.sleep(config['execution'].get('loop_delay_seconds', 60))
-
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[MAIN LOOP ERROR] {e}\n{tb}")
         data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Fehler: {e}\n{tb}", transaction_id)
-        send_message(f"Fehler im Hauptloop: {e}", transaction_id)
+        send_message(f"Fehler im Hauptloop: {e}\n{tb}", transaction_id)
         main_loop_active = False
