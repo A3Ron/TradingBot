@@ -21,10 +21,12 @@ class DataFetcher:
     def get_all_symbols(self, symbol_type=None):
         session = get_session()
         query = "SELECT * FROM symbols"
-        if symbol_type:
-            query += " WHERE symbol_type = :symbol_type"
         try:
-            result = session.execute(text(query), {"symbol_type": symbol_type})
+            if symbol_type:
+                query += " WHERE symbol_type = :symbol_type"
+                result = session.execute(text(query), {"symbol_type": symbol_type})
+            else:
+                result = session.execute(text(query))
             return [dict(row._mapping) for row in result.fetchall()]
         finally:
             session.close()
@@ -35,7 +37,7 @@ class DataFetcher:
             "options": {"defaultType": market_type}
         })
 
-        ohlcv_list = []
+        ohlcv_map = {}
 
         for symbol in symbols:
             try:
@@ -43,12 +45,12 @@ class DataFetcher:
                 df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume"])
                 df["symbol"] = symbol
                 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-                ohlcv_list.append(df)
+                ohlcv_map[symbol] = df
             except Exception as e:
                 self.save_log("ERROR", "fetcher", "fetch_ohlcv", f"Fehler bei {symbol}: {e}", transaction_id)
                 send_message(f"❌ Fehler beim Laden von OHLCV für {symbol}: {e}", transaction_id)
 
-        return ohlcv_list
+        return ohlcv_map
 
     def fetch_binance_tickers(self, transaction_id: str = None) -> dict:
         transaction_id = transaction_id or str(uuid.uuid4())
