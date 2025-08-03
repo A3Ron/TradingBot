@@ -1,7 +1,7 @@
 import os
 import requests
 import re
-from ..data.logger import save_log
+from data.logger import save_log
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
