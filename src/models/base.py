@@ -1,9 +1,9 @@
-import datetime
-from sqlalchemy import Column
+from sqlalchemy import Column, DateTime
 from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime, timezone
 
 Base = declarative_base()
 
 class TimestampMixin:
-    created_at = Column(datetime, default=datetime.now(datetime.timezone.utc))
-    updated_at = Column(datetime, default=datetime.now(datetime.timezone.utc), onupdate=datetime.now(datetime.timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

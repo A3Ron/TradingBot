@@ -5,7 +5,8 @@ import ccxt
 import pandas as pd
 from sqlalchemy import text
 
-from models.trade import Trade, Symbol
+from models.trade import Trade
+from models.symbol import Symbol
 from telegram import send_message
 from data import get_session, save_log
 

@@ -1,7 +1,7 @@
 import os
 import uuid
 from typing import Optional, Dict, Any, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from data import DataFetcher
 from telegram import send_message
@@ -110,7 +110,7 @@ class BaseTrader:
 
         signal = self.open_trade['signal']
         current_price = df['close'].iloc[-1]
-        now = datetime.now(datetime.timezone.utc)
+        now = datetime.now(timezone.utc)
         trade_time = self.open_trade.get('timestamp')
 
         if isinstance(trade_time, str):
