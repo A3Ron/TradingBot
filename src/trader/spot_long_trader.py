@@ -2,6 +2,7 @@ import os
 import ccxt
 from trader import BaseTrader
 from data.constants import SPOT, LONG
+from telegram import send_message  # <-- Wichtig: Telegram-Modul importieren
 
 
 class SpotLongTrader(BaseTrader):
@@ -21,9 +22,6 @@ class SpotLongTrader(BaseTrader):
         self.close_fn = self._close_fn
 
     def _entry_fn(self, volume, tx_id: str):
-        """
-        Erstellt eine MARKET-Buy Order mit quoteOrderQty basierend auf aktuellem Preis.
-        """
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             price = ticker.get('last')
@@ -41,12 +39,10 @@ class SpotLongTrader(BaseTrader):
             )
         except Exception as e:
             self._log('ERROR', '_entry_fn', f"Fehler bei _entry_fn: {e}", tx_id)
+            send_message(f"Fehler bei _entry_fn für {self.symbol}: {e}")
             raise
 
     def _close_fn(self, volume, tx_id: str):
-        """
-        Erstellt eine MARKET-Sell Order mit fixer Menge.
-        """
         try:
             return self.exchange.create_order(
                 self.symbol,
@@ -56,4 +52,5 @@ class SpotLongTrader(BaseTrader):
             )
         except Exception as e:
             self._log('ERROR', '_close_fn', f"Fehler bei _close_fn: {e}", tx_id)
+            send_message(f"Fehler bei _close_fn für {self.symbol}: {e}")
             raise

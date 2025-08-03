@@ -3,6 +3,7 @@ import ccxt
 from trader.base_trader import BaseTrader
 from data.constants import FUTURES, SHORT
 from data.constants import LOG_ERROR
+from telegram import send_message
 
 
 class FuturesShortTrader(BaseTrader):
@@ -28,7 +29,9 @@ class FuturesShortTrader(BaseTrader):
                 self.symbol, volume, {'reduceOnly': False}
             )
         except Exception as e:
-            self._log(LOG_ERROR, '_entry_fn', f"Fehler beim Short Entry-Order für {self.symbol}: {e}", tx_id)
+            error_msg = f"Fehler beim Short Entry-Order für {self.symbol}: {e}"
+            self._log(LOG_ERROR, '_entry_fn', error_msg, tx_id)
+            send_message(error_msg, transaction_id=tx_id)
             raise
 
     def _close_fn(self, volume, tx_id: str):
@@ -37,7 +40,9 @@ class FuturesShortTrader(BaseTrader):
                 self.symbol, volume, {'reduceOnly': True}
             )
         except Exception as e:
-            self._log(LOG_ERROR, '_close_fn', f"Fehler beim Short Close-Order für {self.symbol}: {e}", tx_id)
+            error_msg = f"Fehler beim Short Close-Order für {self.symbol}: {e}"
+            self._log(LOG_ERROR, '_close_fn', error_msg, tx_id)
+            send_message(error_msg, transaction_id=tx_id)
             raise
 
     def _get_current_position_volume(self, tx_id: str):
