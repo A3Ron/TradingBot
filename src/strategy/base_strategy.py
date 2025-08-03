@@ -2,7 +2,7 @@ import pandas as pd
 from typing import Optional, Tuple
 from data import DataFetcher
 from data.constants import LOG_WARNING
-from strategy import SpotLongStrategy, TradeSignal
+from .trade_signal import TradeSignal
 
 class BaseStrategy:
     COL_CLOSE: str = 'close'
@@ -60,8 +60,9 @@ class BaseStrategy:
         try:
             signal_df = self.evaluate_signals(df)
             last = signal_df[signal_df['signal'] == True].iloc[-1]
+            signal_type = 'long' if self.__class__.__name__.lower().startswith('spot') else 'short'
             return TradeSignal(
-                signal_type='long' if isinstance(self, SpotLongStrategy) else 'short',
+                signal_type=signal_type,
                 entry=float(last['entry']),
                 stop_loss=float(last['stop_loss']),
                 take_profit=float(last['take_profit']),
@@ -82,7 +83,8 @@ class BaseStrategy:
                     rsi = float(last[self.COL_RSI])
                     price_change = float(last[self.COL_PRICE_CHANGE])
                     volume = float(last[self.COL_VOLUME])
-                    score = abs(price_change) * volume * (rsi if isinstance(self, SpotLongStrategy) else 100 - rsi)
+                    rsi_weight = rsi if self.__class__.__name__.lower().startswith('spot') else 100 - rsi
+                    score = abs(price_change) * volume * rsi_weight
                     if score > best_score:
                         best_score = score
                         best_symbol = symbol

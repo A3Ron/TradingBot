@@ -15,7 +15,7 @@ from trader.futures_short_trader import FuturesShortTrader
 from strategy.strategy_loader import get_strategy
 
 # --- Konstanten ---
-CONFIG_PATH = 'config.yaml'
+CONFIG_PATH = '../config.yaml'
 STRATEGY_PATH = 'strategy/strategy_high_volatility_breakout_momentum.yaml'
 MAIN = "main"
 MAIN_LOOP = "main_loop"

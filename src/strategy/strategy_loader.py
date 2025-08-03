@@ -3,7 +3,7 @@ import yaml
 import traceback
 from .spot_long_strategy import SpotLongStrategy
 from .futures_short_strategy import FuturesShortStrategy
-from src.telegram.message import send_message
+from telegram.message import send_message
 
 
 def get_strategy(config):
