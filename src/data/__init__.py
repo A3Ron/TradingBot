@@ -3,7 +3,7 @@ from .db import get_session
 from .symbols import filter_by_volume, get_volatility, to_ccxt_symbol
 from .logger import save_log
 from .fetcher import DataFetcher
-from .trades import save_trade, close_trade
+from .trades import open_trade, close_trade
 
 __all__ = [
     'LOG_DEBUG', 'LOG_INFO', 'LOG_WARNING', 'LOG_ERROR', 'DATA', 'MIN_VOLUME_USD',
@@ -11,5 +11,5 @@ __all__ = [
     'filter_by_volume', 'get_volatility', 'to_ccxt_symbol',
     'save_log',
     'DataFetcher',
-    'save_trade', 'close_trade'
+    'open_trade', 'close_trade'
 ]
