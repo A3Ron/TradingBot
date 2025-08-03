@@ -1,4 +1,5 @@
-from sqlalchemy import Column, String, Float, DateTime, Text, UUID, Integer, text, ForeignKey
+from datetime import datetime
+from sqlalchemy import Column, String, Float, UUID, text, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from models.base import Base, TimestampMixin
 
@@ -10,7 +11,7 @@ class Trade(Base, TimestampMixin):
     parent_trade_id = Column(UUID, ForeignKey('trades.id'), index=True, nullable=True)
     symbol_id = Column(UUID, ForeignKey('symbols.id'), index=True)
     market_type = Column(String(16), index=True)
-    timestamp = Column(DateTime, index=True, default=DateTime.utcnow)
+    timestamp = Column(datetime, index=True, default=datetime.now(datetime.timezone.utc))
     side = Column(String(8))
     status = Column(String(20))
     trade_volume = Column(Float)

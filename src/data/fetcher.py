@@ -1,8 +1,9 @@
+import datetime
 import traceback
 import uuid
 import ccxt
 import pandas as pd
-from sqlalchemy import text, DateTime
+from sqlalchemy import text
 
 from models.trade import Trade, Symbol
 from telegram import send_message
@@ -88,7 +89,7 @@ class DataFetcher:
         with get_session() as session:
             session.query(Symbol).delete()
 
-            now = DateTime.utcnow()
+            now = datetime.now(datetime.timezone.utc)
 
             for market in spot_markets.values():
                 if market.get("active") and market.get("quote") == "USDT":
