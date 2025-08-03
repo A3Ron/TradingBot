@@ -1,4 +1,5 @@
 import os
+import uuid
 import requests
 import re
 from data.logger import save_log
@@ -25,7 +26,7 @@ def send_message(message: str, transaction_id: str = None, markdown: bool = True
         markdown: True = Telegram MarkdownV2 aktivieren
     """
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        save_log("WARNING", "telegram", "send_message", "TELEGRAM_TOKEN oder CHAT_ID fehlt – keine Nachricht gesendet", transaction_id or "unknown")
+        save_log("WARNING", "telegram", "send_message", "TELEGRAM_TOKEN oder CHAT_ID fehlt – keine Nachricht gesendet", transaction_id or str(uuid.uuid4()))
         return
 
     full_message = f"[{transaction_id}]\n{message}" if transaction_id else message
@@ -48,7 +49,7 @@ def send_message(message: str, transaction_id: str = None, markdown: bool = True
         )
 
         if response.status_code != 200:
-            save_log("ERROR", "telegram", "send_message", f"Telegram API Fehler {response.status_code}: {response.text}", transaction_id or "unknown")
+            save_log("ERROR", "telegram", "send_message", f"Telegram API Fehler {response.status_code}: {response.text}", transaction_id or str(uuid.uuid4()))
 
     except requests.RequestException as e:
-        save_log("ERROR", "telegram", "send_message", f"Telegram Netzwerkfehler: {e}", transaction_id or "unknown")
+        save_log("ERROR", "telegram", "send_message", f"Telegram Netzwerkfehler: {e}", transaction_id or str(uuid.uuid4()))
