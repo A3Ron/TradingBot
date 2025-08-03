@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from data import DataFetcher
 from telegram import send_message
-from data.constants import LOG_INFO, LOG_WARN, LOG_ERROR
+from data.constants import LOG_INFO, LOG_WARNING, LOG_ERROR
 
 EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
 
@@ -58,7 +58,7 @@ class BaseTrader:
             if step:
                 return (volume // step) * step
         except Exception as e:
-            self._log(LOG_WARN, 'round_volume', str(e), str(uuid.uuid4()))
+            self._log(LOG_WARNING, 'round_volume', str(e), str(uuid.uuid4()))
         return round(volume, 6)
 
     def load_open_trade(self, tx_id: str):
@@ -99,7 +99,7 @@ class BaseTrader:
                     amt = pos.get('contracts') or pos.get('positionAmt')
                     if amt and float(amt) < 0:
                         return abs(float(amt))
-            self._log(LOG_WARN, 'fetch_short_position_volume', f"No open short position found for {self.symbol}.", tx_id)
+            self._log(LOG_WARNING, 'fetch_short_position_volume', f"No open short position found for {self.symbol}.", tx_id)
         except Exception as e:
             self._log(LOG_ERROR, 'fetch_short_position_volume', f"Error fetching positions: {e}", tx_id)
         return 0.0
@@ -143,7 +143,7 @@ class BaseTrader:
         self.load_open_trade(transaction_id)
         df = ohlcv_list.get(self.symbol)
         if df is None or df.empty:
-            self._log(LOG_WARN, 'handle_trades', f"Keine OHLCV-Daten für {self.symbol} verfügbar.", transaction_id)
+            self._log(LOG_WARNING, 'handle_trades', f"Keine OHLCV-Daten für {self.symbol} verfügbar.", transaction_id)
             return
 
         signal = strategy.generate_signal(df)
@@ -162,4 +162,4 @@ class BaseTrader:
             if self.validate_signal(signal, transaction_id):
                 self.execute_trade(signal, transaction_id, self.entry_fn)
             else:
-                self._log(LOG_WARN, 'handle_trades', f"Signal für {self.symbol} nicht gültig: {signal}", transaction_id)
+                self._log(LOG_WARNING, 'handle_trades', f"Signal für {self.symbol} nicht gültig: {signal}", transaction_id)

@@ -1,7 +1,7 @@
 import pandas as pd
 from typing import Optional, Tuple
 from data import DataFetcher
-from data.constants import LOG_WARN
+from data.constants import LOG_WARNING
 from strategy import SpotLongStrategy, TradeSignal
 
 class BaseStrategy:
@@ -46,7 +46,7 @@ class BaseStrategy:
         df = self.ensure_rsi_column(df)
         rsi = df[self.COL_RSI].iloc[-1]
         if pd.isnull(rsi):
-            self.data.save_log(LOG_WARN, self.__class__.__name__, 'should_exit_momentum', "RSI ist NaN.")
+            self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_momentum', "RSI ist NaN.")
             return False
         return rsi < self.momentum_exit_rsi if direction == 'long' else rsi > self.momentum_exit_rsi
 

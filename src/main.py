@@ -5,11 +5,10 @@ import time
 import re
 import sys
 import traceback
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-from data.constants import LOG_DEBUG, LOG_ERROR, LOG_INFO
-from data.fetcher import DataFetcher, filter_by_volume, get_volatility, fetch_binance_tickers
+from data import LOG_DEBUG, LOG_ERROR, DataFetcher
+from data.symbols import filter_by_volume, get_volatility
 from telegram.message import send_message
 from trader.spot_long_trader import SpotLongTrader
 from trader.futures_short_trader import FuturesShortTrader
@@ -123,7 +122,7 @@ while main_loop_active:
         spot_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="spot")]
         futures_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="futures")]
 
-        tickers = fetch_binance_tickers()
+        tickers = data_fetcher.fetch_binance_tickers()
         spot_symbols = sorted(
             [s for s in filter_by_volume(spot_symbols_all, tickers, MIN_VOLUME_USD) if s not in BLACKLIST],
             key=lambda s: get_volatility(s, tickers), reverse=True
