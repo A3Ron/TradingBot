@@ -1,11 +1,10 @@
-from symtable import Symbol
 import traceback
 import uuid
 import ccxt
 import pandas as pd
 from sqlalchemy import text, DateTime
 
-from models.trade import Trade
+from models.trade import Trade, Symbol
 from telegram import send_message
 from data import get_session, save_log
 
@@ -123,7 +122,7 @@ class DataFetcher:
     def get_last_open_trade(self, symbol: str, side: str, market_type: str):
         with get_session() as session:
             return session.query(Trade).filter_by(
-                symbol=symbol,
+                symbol_name=symbol,
                 side=side,
                 market_type=market_type,
                 status="open"

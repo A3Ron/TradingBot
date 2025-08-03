@@ -11,8 +11,8 @@ class Trade(Base, TimestampMixin):
     symbol_id = Column(UUID, ForeignKey('symbols.id'), index=True)
     market_type = Column(String(16), index=True)
     timestamp = Column(DateTime, index=True, default=DateTime.utcnow)
-    side = Column(String(8))  # could be ENUM
-    status = Column(String(20))  # could be ENUM
+    side = Column(String(8))
+    status = Column(String(20))
     trade_volume = Column(Float)
     entry_price = Column(Float)
     stop_loss_price = Column(Float)
@@ -24,4 +24,4 @@ class Trade(Base, TimestampMixin):
     profit_realized = Column(Float)
     raw_order_data = Column(JSONB)
     extra = Column(JSONB)
-    symbol_name = Column(String(32))  # optional but useful for reporting
+    symbol_name = Column(String(32))
