@@ -24,7 +24,7 @@ class DataFetcher:
             query += " WHERE symbol_type = :symbol_type"
         try:
             result = session.execute(text(query), {"symbol_type": symbol_type})
-            return [dict(row) for row in result.fetchall()]
+            return [dict(row._mapping) for row in result.fetchall()]
         finally:
             session.close()
 
@@ -90,7 +90,7 @@ class DataFetcher:
         with get_session() as session:
             session.query(Symbol).delete()
 
-            now = datetime.now(datetime.timezone.utc)
+            now = datetime.now(timezone.utc)
 
             for market in spot_markets.values():
                 if market.get("active") and market.get("quote") == "USDT":

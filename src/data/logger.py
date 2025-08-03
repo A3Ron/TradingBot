@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime, timezone
 import sys
 from sqlalchemy import text
 from .db import get_session
@@ -13,7 +13,7 @@ def save_log(level, source, method, message, transaction_id, recursion=0):
             VALUES (:transaction_id, :timestamp, :level, :source, :method, :message)
         """), {
             'transaction_id': transaction_id,
-            'timestamp': datetime.now(datetime.timezone.utc),
+            'timestamp': datetime.now(timezone.utc),
             'level': level,
             'source': source,
             'method': method,
