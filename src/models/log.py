@@ -1,6 +1,5 @@
 import datetime
-from narwhals import Datetime
-from sqlalchemy import Column, String, Text, UUID, text
+from sqlalchemy import Column, String, Text, UUID, text, DateTime
 from models.base import Base, TimestampMixin
 
 class Log(Base, TimestampMixin):
@@ -8,7 +7,7 @@ class Log(Base, TimestampMixin):
 
     id = Column(UUID, primary_key=True, server_default=text('gen_random_uuid()'))
     transaction_id = Column(UUID, index=True)
-    timestamp = Column(Datetime, index=True, default=lambda: datetime.now(datetime.timezone.utc))
+    timestamp = Column(DateTime, index=True, default=lambda: datetime.now(datetime.timezone.utc))
     level = Column(String(16), index=True)
     source = Column(String(64))
     method = Column(String(64))
