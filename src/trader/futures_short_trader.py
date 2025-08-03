@@ -17,10 +17,14 @@ class FuturesShortTrader(BaseTrader):
             })
 
     def entry_fn(self, volume):
-        return self.exchange.create_market_sell_order(self.symbol, volume, {'reduceOnly': False})
+        return self.exchange.create_market_sell_order(
+            self.symbol, volume, {'reduceOnly': False}
+        )
 
     def close_fn(self, volume):
-        return self.exchange.create_market_buy_order(self.symbol, volume, {'reduceOnly': True})
+        return self.exchange.create_market_buy_order(
+            self.symbol, volume, {'reduceOnly': True}
+        )
 
     def get_current_position_volume(self):
         return self.fetch_short_position_volume(str(uuid.uuid4()))

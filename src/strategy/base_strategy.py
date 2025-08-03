@@ -1,7 +1,8 @@
 import pandas as pd
-from typing import Optional
+from typing import Optional, Tuple
 from data import DataFetcher
 from data.constants import LOG_WARN
+from strategy import SpotLongStrategy, TradeSignal
 
 class BaseStrategy:
     COL_CLOSE: str = 'close'
@@ -54,3 +55,46 @@ class BaseStrategy:
         if profit_pct >= self.trailing_trigger_pct:
             return entry
         return None
+
+    def generate_signal(self, df: pd.DataFrame) -> Optional[TradeSignal]:
+        try:
+            signal_df = self.evaluate_signals(df)
+            last = signal_df[signal_df['signal'] == True].iloc[-1]
+            return TradeSignal(
+                signal_type='long' if isinstance(self, SpotLongStrategy) else 'short',
+                entry=float(last['entry']),
+                stop_loss=float(last['stop_loss']),
+                take_profit=float(last['take_profit']),
+                volume=float(last['volume'])
+            )
+        except Exception:
+            return None
+
+    def select_best_signal(self, ohlcv_map: dict) -> Optional[Tuple[str, pd.DataFrame]]:
+        best_score = -float('inf')
+        best_symbol = None
+        best_df = None
+        for symbol, df in ohlcv_map.items():
+            try:
+                signal_df = self.evaluate_signals(df)
+                last = signal_df[signal_df['signal'] == True].iloc[-1:]
+                if not last.empty:
+                    rsi = float(last[self.COL_RSI])
+                    price_change = float(last[self.COL_PRICE_CHANGE])
+                    volume = float(last[self.COL_VOLUME])
+                    score = abs(price_change) * volume * (rsi if isinstance(self, SpotLongStrategy) else 100 - rsi)
+                    if score > best_score:
+                        best_score = score
+                        best_symbol = symbol
+                        best_df = df
+            except Exception:
+                continue
+        if best_symbol and best_df is not None:
+            return best_symbol, best_df
+        return None
+
+    def should_exit_trade(self, signal: TradeSignal, current_price: float) -> bool:
+        sl_hit = current_price <= signal.stop_loss if signal.signal_type == 'long' else current_price >= signal.stop_loss
+        tp_hit = current_price >= signal.take_profit if signal.signal_type == 'long' else current_price <= signal.take_profit
+        momentum_exit = self.should_exit_momentum(pd.DataFrame({'close': [current_price]}), direction=signal.signal_type)
+        return sl_hit or tp_hit or momentum_exit

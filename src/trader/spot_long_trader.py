@@ -17,7 +17,9 @@ class SpotLongTrader(BaseTrader):
 
     def entry_fn(self, volume):
         price = self.exchange.fetch_ticker(self.symbol).get('last')
-        return self.exchange.create_order(self.symbol, 'MARKET', 'BUY', None, None, {'quoteOrderQty': price * volume})
+        return self.exchange.create_order(
+            self.symbol, 'MARKET', 'BUY', None, None, {'quoteOrderQty': price * volume}
+        )
 
     def close_fn(self, volume):
         return self.exchange.create_order(self.symbol, 'MARKET', 'SELL', volume)

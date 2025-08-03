@@ -4,40 +4,64 @@ import yaml
 import time
 import re
 import sys
+import traceback
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 from data.constants import LOG_DEBUG, LOG_ERROR, LOG_INFO
-from .data import (
-    DataFetcher, filter_by_volume, get_volatility, fetch_binance_tickers
-)
-from .telegram import send_message
-from .trader import SpotLongTrader, FuturesShortTrader
-from .strategy import get_strategy
+from data.fetcher import DataFetcher, filter_by_volume, get_volatility, fetch_binance_tickers
+from telegram.message import send_message
+from trader.spot_long_trader import SpotLongTrader
+from trader.futures_short_trader import FuturesShortTrader
+from strategy.strategy_loader import get_strategy
 
 # --- Konstanten ---
 CONFIG_PATH = 'config.yaml'
-STRATEGY_PATH = 'strategy_high_volatility_breakout_momentum.yaml'
+STRATEGY_PATH = 'strategy/strategy_high_volatility_breakout_momentum.yaml'
 MAIN = "main"
 MAIN_LOOP = "main_loop"
 TOP_N = 50
 BLACKLIST = ['USDC/USDT', 'FDUSD/USDT', 'PAXG/USDT', 'WBTC/USDT', 'WBETH/USDT']
 MIN_VOLATILITY_PCT = 1.5
 MIN_VOLUME_USD = 50000000
+EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
+
+def resolve_env_vars(obj):
+    if isinstance(obj, dict):
+        return {k: resolve_env_vars(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [resolve_env_vars(i) for i in obj]
+    elif isinstance(obj, str):
+        return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), ""), obj)
+    return obj
+
+def symbol_db_to_ccxt(symbol, all_db_symbols=None):
+    quotes = set(row['quote_asset'] for row in data_fetcher.get_all_symbols(symbol_type=None) if 'quote_asset' in row and row['quote_asset'])
+    quotes = sorted(quotes, key=lambda x: -len(x))
+    if '/' in symbol:
+        return symbol
+    for quote in quotes:
+        if symbol.endswith(quote):
+            base = symbol[:-len(quote)]
+            return f"{base}/{quote}"
+    return symbol
 
 def format_startup_message(config):
     spot_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type='spot')]
     futures_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type='futures')]
     init_symbol = spot_symbols[0] if spot_symbols else (futures_symbols[0] if futures_symbols else '')
-    strategy_cfg = {}
     try:
         with open(STRATEGY_PATH, encoding="utf-8") as f:
             strategy_cfg = yaml.safe_load(f)
     except Exception:
-        pass
+        strategy_cfg = {}
+
     risk_percent = strategy_cfg.get('risk_percent', '')
     stake_percent = strategy_cfg.get('stake_percent', '')
     futures = config['trading'].get('futures', '')
     params = strategy_cfg.get('params', {})
-    msg = (
+
+    return (
         f"TradingBot gestartet!\n"
         f"Modus: {config['execution'].get('mode', '')}\n"
         f"Initialisiertes Symbol: {init_symbol}\n"
@@ -63,38 +87,16 @@ def format_startup_message(config):
         f"Trailing Stop Trigger %: {params.get('trailing_stop_trigger_pct', '')}\n"
         f"Price Change Periods: {params.get('price_change_periods', '')}\n"
     )
-    return msg
 
-def symbol_db_to_ccxt(symbol, all_db_symbols=None):
-    quotes = set(row['quote_asset'] for row in data_fetcher.get_all_symbols(symbol_type=None) if 'quote_asset' in row and row['quote_asset'])
-    quotes = sorted(quotes, key=lambda x: -len(x))
-    if '/' in symbol:
-        return symbol
-    for quote in quotes:
-        if symbol.endswith(quote):
-            base = symbol[:-len(quote)]
-            return f"{base}/{quote}"
-    return symbol
-
-def resolve_env_vars(obj):
-    if isinstance(obj, dict):
-        return {k: resolve_env_vars(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [resolve_env_vars(i) for i in obj]
-    elif isinstance(obj, str):
-        return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), ""), obj)
-    return obj
-
+# --- Initialisierung ---
 load_dotenv()
-data_fetcher = None
-timeframe = None
+data_fetcher = DataFetcher()
 
 try:
     with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f)
     config = resolve_env_vars(config)
     timeframe = config['trading']['timeframe']
-    data_fetcher = DataFetcher()
 except Exception as e:
     send_message(f"Fehler beim Laden der Config: {e}")
     sys.exit(1)
@@ -110,13 +112,13 @@ except Exception as e:
 main_loop_active = True
 
 while main_loop_active:
-    transaction_id = str(uuid.uuid4())
-    try:
-        if not hasattr(data_fetcher, '_last_symbol_update') or (time.time() - getattr(data_fetcher, '_last_symbol_update', 0)) > 43200:
-            send_message(format_startup_message(config))
-            data_fetcher.update_symbols_from_binance()
-            data_fetcher._last_symbol_update = time.time()
+    send_message(format_startup_message(config))
+    data_fetcher.update_symbols_from_binance()
+    data_fetcher._last_symbol_update = time.time()
 
+    transaction_id = str(uuid.uuid4())
+
+    try:
         all_db_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type=None)]
         spot_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="spot")]
         futures_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="futures")]
@@ -130,9 +132,6 @@ while main_loop_active:
             [s for s in filter_by_volume(futures_symbols_all, tickers, MIN_VOLUME_USD) if s not in BLACKLIST],
             key=lambda s: get_volatility(s, tickers), reverse=True
         )[:TOP_N]
-
-        data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Spot-Symbole: {spot_symbols}", transaction_id)
-        data_fetcher.save_log(LOG_INFO, MAIN, MAIN_LOOP, f"Futures-Symbole: {futures_symbols}", transaction_id)
 
         strategies = get_strategy(config)
         spot_strategy = strategies['spot_long']
@@ -150,15 +149,24 @@ while main_loop_active:
         spot_ohlcv = data_fetcher.fetch_ohlcv(spot_symbols, 'spot', timeframe, transaction_id, price_change_periods + 15)
         futures_ohlcv = data_fetcher.fetch_ohlcv(futures_symbols, 'futures', timeframe, transaction_id, price_change_periods + 15)
 
-        if spot_traders:
-            list(spot_traders.values())[0].handle_trades(spot_strategy, ohlcv_list=spot_ohlcv, transaction_id=transaction_id)
-        if futures_traders:
-            list(futures_traders.values())[0].handle_trades(futures_strategy, ohlcv_list=futures_ohlcv, transaction_id=transaction_id)
+        best_spot = spot_strategy.select_best_signal(spot_ohlcv)
+        best_futures = futures_strategy.select_best_signal(futures_ohlcv)
+
+        if best_spot:
+            symbol, df = best_spot
+            if symbol in spot_traders:
+                spot_traders[symbol].handle_trades(spot_strategy, {symbol: df}, transaction_id)
+
+        if best_futures:
+            symbol, df = best_futures
+            if symbol in futures_traders:
+                futures_traders[symbol].handle_trades(futures_strategy, {symbol: df}, transaction_id)
 
         data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Loop abgeschlossen', transaction_id)
 
+        time.sleep(config['execution'].get('loop_delay_seconds', 60))
+
     except Exception as e:
-        import traceback
         tb = traceback.format_exc()
         print(f"[MAIN LOOP ERROR] {e}\n{tb}")
         data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Fehler: {e}\n{tb}", transaction_id)

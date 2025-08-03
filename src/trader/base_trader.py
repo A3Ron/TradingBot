@@ -1,11 +1,13 @@
 import os
 import uuid
 from typing import Optional, Dict, Any, Callable
+from datetime import datetime, timedelta
+
 from data import DataFetcher
 from telegram import send_message
-from data.constants import (
-    LOG_INFO, LOG_WARN, LOG_ERROR
-)
+from data.constants import LOG_INFO, LOG_WARN, LOG_ERROR
+
+EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
 
 class BaseTrader:
     def __init__(self, config: dict, symbol: str, market_type: str, side: str,
@@ -108,8 +110,22 @@ class BaseTrader:
 
         signal = self.open_trade['signal']
         current_price = df['close'].iloc[-1]
+        now = datetime.now(datetime.timezone.utc)
+        trade_time = self.open_trade.get('timestamp')
+
+        if isinstance(trade_time, str):
+            trade_time = datetime.fromisoformat(trade_time.replace('Z', '+00:00'))
+
+        cooldown_active = trade_time and (now - trade_time).total_seconds() < EXIT_COOLDOWN_SECONDS
 
         if exit_condition(current_price):
+            is_stop_loss_hit = (current_price <= signal.stop_loss) if self.side == 'long' else (current_price >= signal.stop_loss)
+            is_take_profit_hit = (current_price >= signal.take_profit) if self.side == 'long' else (current_price <= signal.take_profit)
+
+            if cooldown_active and not (is_stop_loss_hit or is_take_profit_hit):
+                self._log(LOG_INFO, 'monitor_trade', f"Exit verhindert durch Cooldown ({self.symbol})", tx_id)
+                return None
+
             volume = fetch_position_fn() if fetch_position_fn else self.open_trade.get('trade_volume') or signal.volume
             volume = self.round_volume(volume)
             try:
@@ -122,3 +138,28 @@ class BaseTrader:
                 self._log(LOG_ERROR, 'monitor_trade', f"Failed to close: {e}", tx_id)
                 send_message(f"Failed to close {self.symbol}: {e}")
         return None
+
+    def handle_trades(self, strategy, ohlcv_list, transaction_id: str):
+        self.load_open_trade(transaction_id)
+        df = ohlcv_list.get(self.symbol)
+        if df is None or df.empty:
+            self._log(LOG_WARN, 'handle_trades', f"Keine OHLCV-Daten für {self.symbol} verfügbar.", transaction_id)
+            return
+
+        signal = strategy.generate_signal(df)
+
+        if self.open_trade:
+            exit = self.monitor_trade(
+                df,
+                transaction_id,
+                lambda price: strategy.should_exit_trade(self.open_trade['signal'], price),
+                self.close_fn,
+                self.get_current_position_volume if self.side == 'short' else None
+            )
+            if exit == 'closed':
+                self._log(LOG_INFO, 'handle_trades', f"Trade wurde geschlossen für {self.symbol}", transaction_id)
+        elif strategy.should_enter_trade(signal):
+            if self.validate_signal(signal, transaction_id):
+                self.execute_trade(signal, transaction_id, self.entry_fn)
+            else:
+                self._log(LOG_WARN, 'handle_trades', f"Signal für {self.symbol} nicht gültig: {signal}", transaction_id)
