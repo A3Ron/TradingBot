@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any, Callable
 from datetime import datetime, timezone
 
 from data import DataFetcher
+from data.trades import open_trade, close_trade
 from telegram import send_message
 from data.constants import LOG_INFO, LOG_WARNING, LOG_ERROR
 
@@ -25,6 +26,11 @@ class BaseTrader:
         self.mode = config['execution']['mode']
         self.telegram_token = os.getenv('TELEGRAM_TOKEN', '')
         self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
+
+        # Diese Methoden müssen von der Subklasse zugewiesen werden
+        self.entry_fn: Optional[Callable[[float, str], Any]] = None
+        self.close_fn: Optional[Callable[[float, str], Any]] = None
+        self.get_current_position_volume: Optional[Callable[[str], float]] = None
 
     def _log(self, level: str, method: str, message: str, tx_id: str):
         self.data.save_log(level, self.__class__.__name__, method, message, tx_id)
@@ -73,7 +79,7 @@ class BaseTrader:
             self._log(LOG_INFO, 'load_open_trade', f"No open trade found for {self.symbol} ({self.side})", tx_id)
             self.open_trade = None
 
-    def execute_trade(self, signal, tx_id: str, entry_fn: Callable[[float], Any]) -> Optional[Dict[str, Any]]:
+    def execute_trade(self, signal, tx_id: str, entry_fn: Callable[[float, str], Any]) -> Optional[Dict[str, Any]]:
         volume = self.round_volume(signal.volume)
         self._log(LOG_INFO, 'execute_trade', f"Executing trade for {self.symbol} at {signal.entry} vol {volume}", tx_id)
 
@@ -83,8 +89,9 @@ class BaseTrader:
             return {'status': 'testnet'}
 
         try:
-            order = entry_fn(volume)
+            order = entry_fn(volume, tx_id)
             send_message(f"{self.side.upper()} Trade executed: {self.symbol} @ {signal.entry} Vol: {volume}\nOrder: {order}")
+            open_trade(tx_id, self.symbol, self.market_type, self.side, signal, volume, signal.entry, signal.stop_loss, signal.take_profit, order)
             return order
         except Exception as e:
             self._log(LOG_ERROR, 'execute_trade', f"Order failed: {e}", tx_id)
@@ -104,7 +111,7 @@ class BaseTrader:
             self._log(LOG_ERROR, 'fetch_short_position_volume', f"Error fetching positions: {e}", tx_id)
         return 0.0
 
-    def monitor_trade(self, df, tx_id: str, exit_condition: Callable[[float], bool], close_fn: Callable[[float], Any], fetch_position_fn: Optional[Callable[[], float]] = None) -> Optional[str]:
+    def monitor_trade(self, df, tx_id: str, exit_condition: Callable[[float], bool], close_fn: Callable[[float, str], Any], fetch_position_fn: Optional[Callable[[str], float]] = None) -> Optional[str]:
         if not self.open_trade:
             return None
 
@@ -126,12 +133,13 @@ class BaseTrader:
                 self._log(LOG_INFO, 'monitor_trade', f"Exit verhindert durch Cooldown ({self.symbol})", tx_id)
                 return None
 
-            volume = fetch_position_fn() if fetch_position_fn else self.open_trade.get('trade_volume') or signal.volume
+            volume = fetch_position_fn(tx_id) if fetch_position_fn else self.open_trade.get('trade_volume') or signal.volume
             volume = self.round_volume(volume)
             try:
-                close_fn(volume)
+                close_fn(volume, tx_id)
                 self._log(LOG_INFO, 'monitor_trade', f"Closed {self.symbol} at {current_price} vol {volume}", tx_id)
                 send_message(f"Trade closed: {self.symbol} @ {current_price}")
+                close_trade(tx_id, self.symbol, self.market_type, self.side, current_price)
                 self.open_trade = None
                 return 'closed'
             except Exception as e:
