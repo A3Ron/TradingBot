@@ -7,6 +7,7 @@ from data.constants import SPOT, LONG
 class SpotLongTrader(BaseTrader):
     def __init__(self, config, symbol, data_fetcher=None, exchange=None, strategy_config=None):
         super().__init__(config, symbol, SPOT, LONG, data_fetcher, exchange, strategy_config)
+
         if not self.exchange:
             self.exchange = ccxt.binance({
                 'apiKey': os.getenv('BINANCE_API_KEY'),
@@ -15,11 +16,44 @@ class SpotLongTrader(BaseTrader):
                 'options': {'defaultType': 'spot'}
             })
 
-    def entry_fn(self, volume):
-        price = self.exchange.fetch_ticker(self.symbol).get('last')
-        return self.exchange.create_order(
-            self.symbol, 'MARKET', 'BUY', None, None, {'quoteOrderQty': price * volume}
-        )
+        # Methoden als Callbacks verfügbar machen
+        self.entry_fn = self._entry_fn
+        self.close_fn = self._close_fn
 
-    def close_fn(self, volume):
-        return self.exchange.create_order(self.symbol, 'MARKET', 'SELL', volume)
+    def _entry_fn(self, volume, tx_id: str):
+        """
+        Erstellt eine MARKET-Buy Order mit quoteOrderQty basierend auf aktuellem Preis.
+        """
+        try:
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            price = ticker.get('last')
+            if not price:
+                raise ValueError(f"Kein gültiger Preis für {self.symbol}")
+
+            quote_amount = price * volume
+            return self.exchange.create_order(
+                self.symbol,
+                type='MARKET',
+                side='BUY',
+                amount=None,
+                price=None,
+                params={'quoteOrderQty': round(quote_amount, 6)}
+            )
+        except Exception as e:
+            self._log('ERROR', '_entry_fn', f"Fehler bei _entry_fn: {e}", tx_id)
+            raise
+
+    def _close_fn(self, volume, tx_id: str):
+        """
+        Erstellt eine MARKET-Sell Order mit fixer Menge.
+        """
+        try:
+            return self.exchange.create_order(
+                self.symbol,
+                type='MARKET',
+                side='SELL',
+                amount=self.round_volume(volume)
+            )
+        except Exception as e:
+            self._log('ERROR', '_close_fn', f"Fehler bei _close_fn: {e}", tx_id)
+            raise
