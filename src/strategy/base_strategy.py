@@ -2,7 +2,7 @@ import pandas as pd
 import traceback
 from typing import Optional, Tuple
 from data import DataFetcher
-from data.constants import LOG_WARNING, LOG_ERROR
+from data.constants import LOG_WARNING, LOG_ERROR, LOG_DEBUG
 from telegram import send_message
 from .trade_signal import TradeSignal
 
@@ -30,17 +30,6 @@ class BaseStrategy:
         self.rsi_period = int(self.params.get('rsi_period', 14))
         self.price_change_periods = int(self.params.get('price_change_periods', 12))
         self.data = DataFetcher()
-
-    def aggregate_to_5m(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.set_index(self.COL_TIMESTAMP)
-        ohlcv_5m = df.resample('5T').agg({
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        }).dropna().reset_index()
-        return ohlcv_5m
 
     def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:
         delta = series.diff()
@@ -79,7 +68,6 @@ class BaseStrategy:
 
     def generate_signal(self, df: pd.DataFrame) -> Optional[TradeSignal]:
         try:
-            df = self.aggregate_to_5m(df)
             signal_df = self.evaluate_signals(df)
             last = signal_df[signal_df['signal'] == True].iloc[-1]
             signal_type = 'long' if self.__class__.__name__.lower().startswith('spot') else 'short'
@@ -102,21 +90,18 @@ class BaseStrategy:
         best_df = None
         for symbol, df in ohlcv_map.items():
             try:
-                df = self.aggregate_to_5m(df)
                 signal_df = self.evaluate_signals(df)
                 last = signal_df[signal_df['signal'] == True].iloc[-1:]
                 if not last.empty:
-                    if self.COL_RSI not in last or self.COL_PRICE_CHANGE not in last:
+                    if self.COL_VOLUME_SCORE not in last:
                         continue
-                    rsi = float(last[self.COL_RSI].iloc[0])
-                    price_change = float(last[self.COL_PRICE_CHANGE].iloc[0])
-                    volume = float(last[self.COL_VOLUME].iloc[0])
-                    rsi_weight = rsi if self.__class__.__name__.lower().startswith('spot') else 100 - rsi
-                    score = abs(price_change) * volume * rsi_weight
+                    score = float(last[self.COL_VOLUME_SCORE].iloc[0])
                     if score > best_score:
                         best_score = score
                         best_symbol = symbol
                         best_df = df
+                else:
+                    self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'select_best_signal', f"Kein Signal für {symbol}.")
             except Exception as e:
                 tb = traceback.format_exc()
                 self.data.save_log(LOG_ERROR, self.__class__.__name__, 'select_best_signal', f"Fehler bei {symbol}: {e}\n{tb}")
