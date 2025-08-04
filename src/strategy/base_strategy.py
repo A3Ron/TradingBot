@@ -31,6 +31,17 @@ class BaseStrategy:
         self.price_change_periods = int(self.params.get('price_change_periods', 12))
         self.data = DataFetcher()
 
+    def aggregate_to_5m(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.set_index(self.COL_TIMESTAMP)
+        ohlcv_5m = df.resample('5T').agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }).dropna().reset_index()
+        return ohlcv_5m
+
     def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:
         delta = series.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
@@ -68,6 +79,7 @@ class BaseStrategy:
 
     def generate_signal(self, df: pd.DataFrame) -> Optional[TradeSignal]:
         try:
+            df = self.aggregate_to_5m(df)
             signal_df = self.evaluate_signals(df)
             last = signal_df[signal_df['signal'] == True].iloc[-1]
             signal_type = 'long' if self.__class__.__name__.lower().startswith('spot') else 'short'
@@ -90,6 +102,7 @@ class BaseStrategy:
         best_df = None
         for symbol, df in ohlcv_map.items():
             try:
+                df = self.aggregate_to_5m(df)
                 signal_df = self.evaluate_signals(df)
                 last = signal_df[signal_df['signal'] == True].iloc[-1:]
                 if not last.empty:
