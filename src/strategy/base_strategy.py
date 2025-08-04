@@ -1,7 +1,8 @@
 import pandas as pd
+import traceback
 from typing import Optional, Tuple
 from data import DataFetcher
-from data.constants import LOG_WARNING
+from data.constants import LOG_WARNING, LOG_ERROR
 from telegram import send_message
 from .trade_signal import TradeSignal
 
@@ -44,13 +45,20 @@ class BaseStrategy:
         return df
 
     def should_exit_momentum(self, df: pd.DataFrame, direction: str = 'long') -> bool:
-        df = self.ensure_rsi_column(df)
-        rsi = df[self.COL_RSI].iloc[-1]
-        if pd.isnull(rsi):
-            self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_momentum', "RSI ist NaN.")
-            send_message(f"[WARNUNG] {self.__class__.__name__} | should_exit_momentum: RSI ist NaN.")
+        try:
+            df = self.ensure_rsi_column(df)
+            rsi = df[self.COL_RSI].iloc[-1]
+            if pd.isnull(rsi):
+                msg = "RSI ist NaN."
+                self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_momentum', msg)
+                send_message(f"[WARNUNG] {self.__class__.__name__} | should_exit_momentum: {msg}")
+                return False
+            return rsi < self.momentum_exit_rsi if direction == 'long' else rsi > self.momentum_exit_rsi
+        except Exception as e:
+            tb = traceback.format_exc()
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'should_exit_momentum', f"{e}\n{tb}")
+            send_message(f"[FEHLER] {self.__class__.__name__} | should_exit_momentum: {e}\n{tb}")
             return False
-        return rsi < self.momentum_exit_rsi if direction == 'long' else rsi > self.momentum_exit_rsi
 
     def get_trailing_stop(self, entry: float, current_price: float, direction: str = 'long') -> Optional[float]:
         profit_pct = (current_price - entry) / entry if direction == 'long' else (entry - current_price) / entry
@@ -71,8 +79,9 @@ class BaseStrategy:
                 volume=float(last['volume'])
             )
         except Exception as e:
-            self.data.save_log(LOG_WARNING, self.__class__.__name__, 'generate_signal', f"Fehler: {e}")
-            send_message(f"[FEHLER] {self.__class__.__name__} | generate_signal: {e}")
+            tb = traceback.format_exc()
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'generate_signal', f"{e}\n{tb}")
+            send_message(f"[FEHLER] {self.__class__.__name__} | generate_signal: {e}\n{tb}")
             return None
 
     def select_best_signal(self, ohlcv_map: dict) -> Optional[Tuple[str, pd.DataFrame]]:
@@ -96,15 +105,22 @@ class BaseStrategy:
                         best_symbol = symbol
                         best_df = df
             except Exception as e:
-                self.data.save_log(LOG_WARNING, self.__class__.__name__, 'select_best_signal', f"Fehler bei {symbol}: {e}")
-                send_message(f"[FEHLER] {self.__class__.__name__} | select_best_signal bei {symbol}: {e}")
+                tb = traceback.format_exc()
+                self.data.save_log(LOG_ERROR, self.__class__.__name__, 'select_best_signal', f"Fehler bei {symbol}: {e}\n{tb}")
+                send_message(f"[FEHLER] {self.__class__.__name__} | select_best_signal bei {symbol}: {e}\n{tb}")
                 continue
         if best_symbol and best_df is not None:
             return best_symbol, best_df
         return None
 
     def should_exit_trade(self, signal: TradeSignal, current_price: float) -> bool:
-        sl_hit = current_price <= signal.stop_loss if signal.signal_type == 'long' else current_price >= signal.stop_loss
-        tp_hit = current_price >= signal.take_profit if signal.signal_type == 'long' else current_price <= signal.take_profit
-        momentum_exit = False  # nur aktivieren, wenn echter Verlauf vorhanden ist
-        return sl_hit or tp_hit or momentum_exit
+        try:
+            sl_hit = current_price <= signal.stop_loss if signal.signal_type == 'long' else current_price >= signal.stop_loss
+            tp_hit = current_price >= signal.take_profit if signal.signal_type == 'long' else current_price <= signal.take_profit
+            momentum_exit = self.should_exit_momentum(pd.DataFrame({'close': [current_price]}), direction=signal.signal_type)
+            return sl_hit or tp_hit or momentum_exit
+        except Exception as e:
+            tb = traceback.format_exc()
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'should_exit_trade', f"{e}\n{tb}")
+            send_message(f"[FEHLER] {self.__class__.__name__} | should_exit_trade: {e}\n{tb}")
+            return False
