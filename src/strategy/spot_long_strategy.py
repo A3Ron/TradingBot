@@ -6,7 +6,7 @@ from telegram import send_message
 
 
 class SpotLongStrategy(BaseStrategy):
-    def evaluate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def evaluate_signals(self, df: pd.DataFrame, transaction_id: str) -> pd.DataFrame:
         try:
             df = df.copy()
             if self.COL_TIMESTAMP not in df.columns:
@@ -38,13 +38,16 @@ class SpotLongStrategy(BaseStrategy):
                     f"Volumen={last[self.COL_VOLUME]:.2f}, "
                     f"RSI={last[self.COL_RSI]:.2f}. Gründe: {last['reason']}"
                 )
-                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals', msg)
+                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals', msg, transaction_id)
+                send_message(f"[DEBUG] {self.__class__.__name__} | evaluate_signals: {msg}", transaction_id)
 
             df['entry'] = df[self.COL_CLOSE].where(df['signal'], pd.NA)
             df['stop_loss'] = (df[self.COL_CLOSE] * (1 - self.stop_loss_pct)).where(df['signal'], pd.NA)
             df['take_profit'] = (df[self.COL_CLOSE] * (1 + self.take_profit_pct)).where(df['signal'], pd.NA)
             df['volume'] = df[self.COL_VOLUME].where(df['signal'], pd.NA)
-            df[self.COL_VOLUME_SCORE] = (abs(df[self.COL_PRICE_CHANGE]) * df[self.COL_VOLUME] * df[self.COL_RSI]).where(df['signal'], pd.NA)
+            df[self.COL_VOLUME_SCORE] = (
+                abs(df[self.COL_PRICE_CHANGE]) * df[self.COL_VOLUME] * df[self.COL_RSI]
+            ).where(df['signal'], pd.NA)
 
             df = df.drop(columns=['reason'])
             return df[[self.COL_TIMESTAMP, self.COL_CLOSE, self.COL_VOLUME, self.COL_PRICE_CHANGE, self.COL_RSI,
@@ -52,6 +55,6 @@ class SpotLongStrategy(BaseStrategy):
 
         except Exception as e:
             tb = traceback.format_exc()
-            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'evaluate_signals', f"{e}\n{tb}")
-            send_message(f"[FEHLER] {self.__class__.__name__} | evaluate_signals: {e}\n{tb}")
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'evaluate_signals', f"{e}\n{tb}", transaction_id)
+            send_message(f"[FEHLER] {self.__class__.__name__} | evaluate_signals: {e}\n{tb}", transaction_id)
             return pd.DataFrame()

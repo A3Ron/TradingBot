@@ -15,7 +15,7 @@ class BaseStrategy:
     COL_RSI: str = 'rsi'
     COL_VOLUME_SCORE: str = 'volume_score'
 
-    def __init__(self, strategy_cfg: dict):
+    def __init__(self, strategy_cfg: dict, transaction_id: str):
         self.config = strategy_cfg
         self.params = strategy_cfg.get('params', {})
         self.stop_loss_pct = float(self.params.get('stop_loss_pct', 0.03))
@@ -29,6 +29,7 @@ class BaseStrategy:
         self.momentum_exit_rsi = int(self.params.get('momentum_exit_rsi', 50))
         self.rsi_period = int(self.params.get('rsi_period', 14))
         self.price_change_periods = int(self.params.get('price_change_periods', 12))
+        self.transaction_id = transaction_id
         self.data = DataFetcher()
 
     def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:
@@ -50,14 +51,14 @@ class BaseStrategy:
             rsi = df[self.COL_RSI].iloc[-1]
             if pd.isnull(rsi):
                 msg = "RSI ist NaN."
-                self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_momentum', msg)
-                send_message(f"[WARNUNG] {self.__class__.__name__} | should_exit_momentum: {msg}")
+                self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_momentum', msg, self.transaction_id)
+                send_message(f"[WARNUNG] {self.__class__.__name__} | should_exit_momentum: {msg}", self.transaction_id)
                 return False
             return rsi < self.momentum_exit_rsi if direction == 'long' else rsi > self.momentum_exit_rsi
         except Exception as e:
             tb = traceback.format_exc()
-            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'should_exit_momentum', f"{e}\n{tb}")
-            send_message(f"[FEHLER] {self.__class__.__name__} | should_exit_momentum: {e}\n{tb}")
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'should_exit_momentum', f"{e}\n{tb}", self.transaction_id)
+            send_message(f"[FEHLER] {self.__class__.__name__} | should_exit_momentum: {e}\n{tb}", self.transaction_id)
             return False
 
     def get_trailing_stop(self, entry: float, current_price: float, direction: str = 'long') -> Optional[float]:
@@ -68,10 +69,7 @@ class BaseStrategy:
 
     def generate_signal(self, df: pd.DataFrame) -> Optional[TradeSignal]:
         try:
-            if df.empty:
-                self.data.save_log(LOG_WARNING, self.__class__.__name__, 'generate_signal', "Leeres DataFrame übergeben.")
-                return None
-            signal_df = self.evaluate_signals(df)
+            signal_df = self.evaluate_signals(df, self.transaction_id)
             last = signal_df[signal_df['signal'] == True].iloc[-1]
             signal_type = 'long' if self.__class__.__name__.lower().startswith('spot') else 'short'
             return TradeSignal(
@@ -83,8 +81,8 @@ class BaseStrategy:
             )
         except Exception as e:
             tb = traceback.format_exc()
-            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'generate_signal', f"{e}\n{tb}")
-            send_message(f"[FEHLER] {self.__class__.__name__} | generate_signal: {e}\n{tb}")
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'generate_signal', f"{e}\n{tb}", self.transaction_id)
+            send_message(f"[FEHLER] {self.__class__.__name__} | generate_signal: {e}\n{tb}", self.transaction_id)
             return None
 
     def select_best_signal(self, ohlcv_map: dict) -> Optional[Tuple[str, pd.DataFrame]]:
@@ -93,10 +91,7 @@ class BaseStrategy:
         best_df = None
         for symbol, df in ohlcv_map.items():
             try:
-                if df.empty:
-                    self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'select_best_signal', f"Leeres DataFrame für {symbol} übersprungen.")
-                    continue
-                signal_df = self.evaluate_signals(df)
+                signal_df = self.evaluate_signals(df, self.transaction_id)
                 last = signal_df[signal_df['signal'] == True].iloc[-1:]
                 if not last.empty:
                     if self.COL_VOLUME_SCORE not in last:
@@ -106,15 +101,12 @@ class BaseStrategy:
                         best_score = score
                         best_symbol = symbol
                         best_df = df
-                        # Optional: Debugmeldung zum gefundenen Signal
-                        self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'select_best_signal',
-                            f"Signal für {symbol}: VolumeScore={score:.2f}")
                 else:
-                    self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'select_best_signal', f"Kein Signal für {symbol}.")
+                    self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'select_best_signal', f"Kein Signal für {symbol}.", self.transaction_id)
             except Exception as e:
                 tb = traceback.format_exc()
-                self.data.save_log(LOG_ERROR, self.__class__.__name__, 'select_best_signal', f"Fehler bei {symbol}: {e}\n{tb}")
-                send_message(f"[FEHLER] {self.__class__.__name__} | select_best_signal bei {symbol}: {e}\n{tb}")
+                self.data.save_log(LOG_ERROR, self.__class__.__name__, 'select_best_signal', f"Fehler bei {symbol}: {e}\n{tb}", self.transaction_id)
+                send_message(f"[FEHLER] {self.__class__.__name__} | select_best_signal bei {symbol}: {e}\n{tb}", self.transaction_id)
                 continue
         if best_symbol and best_df is not None:
             return best_symbol, best_df
@@ -128,6 +120,6 @@ class BaseStrategy:
             return sl_hit or tp_hit or momentum_exit
         except Exception as e:
             tb = traceback.format_exc()
-            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'should_exit_trade', f"{e}\n{tb}")
-            send_message(f"[FEHLER] {self.__class__.__name__} | should_exit_trade: {e}\n{tb}")
+            self.data.save_log(LOG_ERROR, self.__class__.__name__, 'should_exit_trade', f"{e}\n{tb}", self.transaction_id)
+            send_message(f"[FEHLER] {self.__class__.__name__} | should_exit_trade: {e}\n{tb}", self.transaction_id)
             return False
