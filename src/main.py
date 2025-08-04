@@ -72,12 +72,9 @@ def format_startup_message(config, spot_symbols, futures_symbols):
         f"Timeframe: {config['trading'].get('timeframe', '')}\n"
         f"Strategie: {strategy_cfg.get('name', 'Unbekannt')}\n"
         f"Risk/Trade: {risk_percent}%\n"
-        f"Stake/Trade: {stake_percent}\n"
+        f"Stake/Trade: {stake_percent}%\n"
         f"Futures: {futures}\n"
         f"Max Trades/Tag: {config['execution'].get('max_trades_per_day', '')}\n"
-        f"--- Gefilterte Symbole ---\n"
-        f"Spot-Symbole ({len(spot_symbols)}): {', '.join(spot_symbols)}\n"
-        f"Futures-Symbole ({len(futures_symbols)}): {', '.join(futures_symbols)}\n"
         f"--- Strategie-Parameter ---\n"
         f"Stop-Loss %: {params.get('stop_loss_pct', '')}\n"
         f"Take-Profit %: {params.get('take_profit_pct', '')}\n"
@@ -88,8 +85,10 @@ def format_startup_message(config, spot_symbols, futures_symbols):
         f"RSI Short: {params.get('rsi_short', '')}\n"
         f"RSI TP Exit: {params.get('rsi_tp_exit', '')}\n"
         f"Momentum Exit RSI: {params.get('momentum_exit_rsi', '')}\n"
-        f"Trailing Stop Trigger %: {params.get('trailing_stop_trigger_pct', '')}\n"
         f"Price Change Periods: {params.get('price_change_periods', '')}\n"
+        f"--- Gefilterte Symbole ---\n"
+        f"Spot-Symbole ({len(spot_symbols)}): {', '.join(spot_symbols)}\n"
+        f"Futures-Symbole ({len(futures_symbols)}): {', '.join(futures_symbols)}\n"
     )
 
 

@@ -10,5 +10,5 @@ postgres:
   port: 5432
   user: postgres
 trading:
-  futures: false
+  futures: true
   timeframe: 1m

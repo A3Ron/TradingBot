@@ -70,20 +70,28 @@ class BaseStrategy:
     def generate_signal(self, df: pd.DataFrame) -> Optional[TradeSignal]:
         try:
             signal_df = self.evaluate_signals(df, self.transaction_id)
-            last = signal_df[signal_df['signal'] == True].iloc[-1]
+            valid_signals = signal_df[signal_df['signal'] == True]
+            if valid_signals.empty:
+                return None
+
+            last = valid_signals.iloc[-1]
+
             signal_type = 'long' if self.__class__.__name__.lower().startswith('spot') else 'short'
+
             return TradeSignal(
                 signal_type=signal_type,
                 entry=float(last['entry']),
                 stop_loss=float(last['stop_loss']),
                 take_profit=float(last['take_profit']),
-                volume=float(last['volume'])
+                volume=float(last['volume']) if pd.api.types.is_scalar(last['volume']) else float(last['volume'].values[0])
             )
+
         except Exception as e:
             tb = traceback.format_exc()
             self.data.save_log(LOG_ERROR, self.__class__.__name__, 'generate_signal', f"{e}\n{tb}", self.transaction_id)
             send_message(f"[FEHLER] {self.__class__.__name__} | generate_signal: {e}\n{tb}", self.transaction_id)
             return None
+
 
     def select_best_signal(self, ohlcv_map: dict) -> Optional[Tuple[str, pd.DataFrame]]:
         best_score = -float('inf')
