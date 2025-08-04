@@ -68,6 +68,9 @@ class BaseStrategy:
 
     def generate_signal(self, df: pd.DataFrame) -> Optional[TradeSignal]:
         try:
+            if df.empty:
+                self.data.save_log(LOG_WARNING, self.__class__.__name__, 'generate_signal', "Leeres DataFrame übergeben.")
+                return None
             signal_df = self.evaluate_signals(df)
             last = signal_df[signal_df['signal'] == True].iloc[-1]
             signal_type = 'long' if self.__class__.__name__.lower().startswith('spot') else 'short'
@@ -90,6 +93,9 @@ class BaseStrategy:
         best_df = None
         for symbol, df in ohlcv_map.items():
             try:
+                if df.empty:
+                    self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'select_best_signal', f"Leeres DataFrame für {symbol} übersprungen.")
+                    continue
                 signal_df = self.evaluate_signals(df)
                 last = signal_df[signal_df['signal'] == True].iloc[-1:]
                 if not last.empty:
@@ -100,6 +106,9 @@ class BaseStrategy:
                         best_score = score
                         best_symbol = symbol
                         best_df = df
+                        # Optional: Debugmeldung zum gefundenen Signal
+                        self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'select_best_signal',
+                            f"Signal für {symbol}: VolumeScore={score:.2f}")
                 else:
                     self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'select_best_signal', f"Kein Signal für {symbol}.")
             except Exception as e:
