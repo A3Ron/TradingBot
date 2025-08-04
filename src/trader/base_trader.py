@@ -166,8 +166,7 @@ class BaseTrader:
             )
             if exit == 'closed':
                 self._log(LOG_INFO, 'handle_trades', f"Trade wurde geschlossen für {self.symbol}", transaction_id)
-        elif strategy.should_enter_trade(signal):
-            if self.validate_signal(signal, transaction_id):
-                self.execute_trade(signal, transaction_id, self.entry_fn)
-            else:
-                self._log(LOG_WARNING, 'handle_trades', f"Signal für {self.symbol} nicht gültig: {signal}", transaction_id)
+        elif signal and self.validate_signal(signal, transaction_id):
+            self.execute_trade(signal, transaction_id, self.entry_fn)
+        else:
+            self._log(LOG_WARNING, 'handle_trades', f"Signal für {self.symbol} nicht gültig: {signal}", transaction_id)
