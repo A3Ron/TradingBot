@@ -6,8 +6,8 @@ from telegram import send_message  # <-- Wichtig: Telegram-Modul importieren
 
 
 class SpotLongTrader(BaseTrader):
-    def __init__(self, config, symbol, data_fetcher=None, exchange=None, strategy_config=None):
-        super().__init__(config, symbol, SPOT, LONG, data_fetcher, exchange, strategy_config)
+    def __init__(self, config, symbol, data_fetcher=None, strategy_config=None):
+        super().__init__(config, symbol, SPOT, LONG, data_fetcher, strategy_config)
 
         if not self.exchange:
             self.exchange = ccxt.binance({

@@ -148,11 +148,11 @@ while main_loop_active:
         futures_strategy = strategies['futures_short']
 
         spot_traders = {
-            symbol: SpotLongTrader(config, symbol, data_fetcher, strategy_cfg, transaction_id)
+            symbol: SpotLongTrader(config, symbol, data_fetcher, strategy_cfg)
             for symbol in spot_symbols
         }
         futures_traders = {
-            symbol: FuturesShortTrader(config, symbol, data_fetcher, strategy_cfg, transaction_id)
+            symbol: FuturesShortTrader(config, symbol, data_fetcher, strategy_cfg)
             for symbol in futures_symbols
         }
 

@@ -13,14 +13,12 @@ EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
 class BaseTrader:
     def __init__(self, config: dict, symbol: str, market_type: str, side: str,
                  data_fetcher: Optional[DataFetcher] = None,
-                 exchange: Optional[Any] = None,
                  strategy_config: Optional[dict] = None):
         self.config = config
         self.symbol = symbol
         self.market_type = market_type
         self.side = side
         self.data = data_fetcher or DataFetcher()
-        self.exchange = exchange
         self.strategy_config = strategy_config or {}
         self.open_trade: Optional[Dict[str, Any]] = None
         self.mode = config['execution']['mode']
