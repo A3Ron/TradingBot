@@ -6,7 +6,7 @@ from .futures_short_strategy import FuturesShortStrategy
 from telegram.message import send_message
 
 
-def get_strategy(config):
+def get_strategy(config, transaction_id: str):
     name = config.get('strategy', {}).get('name', 'high_volatility_breakout_momentum')
     if name != 'high_volatility_breakout_momentum':
         raise ValueError("Nur 'high_volatility_breakout_momentum' wird unterstützt.")
@@ -22,6 +22,6 @@ def get_strategy(config):
         raise RuntimeError(f"Fehler beim Laden der Strategie-Konfiguration: {e}")
 
     return {
-        'spot_long': SpotLongStrategy(strategy_cfg),
-        'futures_short': FuturesShortStrategy(strategy_cfg)
+        'spot_long': SpotLongStrategy(strategy_cfg, transaction_id),
+        'futures_short': FuturesShortStrategy(strategy_cfg, transaction_id)
     }

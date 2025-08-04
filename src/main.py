@@ -144,7 +144,7 @@ while main_loop_active:
             send_message(format_startup_message(config, spot_symbols, futures_symbols))
             startup_sent = True
 
-        strategies = get_strategy(config)
+        strategies = get_strategy(config, transaction_id)
         spot_strategy = strategies['spot_long']
         futures_strategy = strategies['futures_short']
 
@@ -153,7 +153,7 @@ while main_loop_active:
             for symbol in spot_symbols
         }
         futures_traders = {
-            symbol: FuturesShortTrader(config, symbol, data_fetcher, strategy_cfg)
+            symbol: FuturesShortTrader(config, symbol, data_fetcher, strategy_cfg, transaction_id)
             for symbol in futures_symbols
         }
 

@@ -39,7 +39,6 @@ class SpotLongStrategy(BaseStrategy):
                     f"RSI={last[self.COL_RSI]:.2f}. Gründe: {last['reason']}"
                 )
                 self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals', msg, transaction_id)
-                send_message(f"[DEBUG] {self.__class__.__name__} | evaluate_signals: {msg}", transaction_id)
 
             df['entry'] = df[self.COL_CLOSE].where(df['signal'], pd.NA)
             df['stop_loss'] = (df[self.COL_CLOSE] * (1 - self.stop_loss_pct)).where(df['signal'], pd.NA)
