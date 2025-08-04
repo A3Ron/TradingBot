@@ -14,4 +14,3 @@ params:
   rsi_tp_exit: 50 # RSI-Schwelle für Take-Profit-Exit
   rsi_period: 14 # RSI-Berechnungsperiode
   momentum_exit_rsi: 50 # RSI-Schwelle für Momentum-Exit
-  trailing_stop_trigger_pct: 0.0175  # Bei +1.75% Gewinn wird Trailing Stop aktiviert
