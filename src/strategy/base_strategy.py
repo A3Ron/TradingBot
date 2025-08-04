@@ -112,12 +112,47 @@ class BaseStrategy:
             return best_symbol, best_df
         return None
 
-    def should_exit_trade(self, signal: TradeSignal, current_price: float) -> bool:
+    def should_exit_trade(self, signal: TradeSignal, current_price: float, symbol: str) -> bool:
         try:
+            # 1. Stop-Loss und Take-Profit prüfen
             sl_hit = current_price <= signal.stop_loss if signal.signal_type == 'long' else current_price >= signal.stop_loss
             tp_hit = current_price >= signal.take_profit if signal.signal_type == 'long' else current_price <= signal.take_profit
-            momentum_exit = self.should_exit_momentum(pd.DataFrame({'close': [current_price]}), direction=signal.signal_type)
-            return sl_hit or tp_hit or momentum_exit
+
+            # 2. RSI-Momentum-Exit prüfen (basierend auf echten 1m-Candles)
+            ohlcv = self.data.fetch_ohlcv(symbol, timeframe='1m', limit=self.rsi_period + 1)
+            if not ohlcv or len(ohlcv) < self.rsi_period:
+                msg = f"Nicht genügend OHLCV-Daten für RSI-Berechnung bei {symbol}"
+                self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_trade', msg, self.transaction_id)
+                send_message(f"[WARNUNG] {self.__class__.__name__} | {msg}", self.transaction_id)
+                return False
+
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            momentum_exit = self.should_exit_momentum(df, direction=signal.signal_type)
+
+            # 3. Trailing Stop prüfen (wenn über Trigger-Gewinn)
+            trailing_stop = self.get_trailing_stop(signal.entry, current_price, direction=signal.signal_type)
+            trailing_exit = False
+            if trailing_stop is not None:
+                if signal.signal_type == 'long' and current_price < trailing_stop:
+                    trailing_exit = True
+                elif signal.signal_type == 'short' and current_price > trailing_stop:
+                    trailing_exit = True
+
+            # 4. Logging
+            reason = []
+            if sl_hit: reason.append("Stop-Loss erreicht")
+            if tp_hit: reason.append("Take-Profit erreicht")
+            if momentum_exit: reason.append("Momentum-Exit (RSI)")
+            if trailing_exit: reason.append("Trailing Stop erreicht")
+
+            if reason:
+                msg = f"Trade-Exit-Bedingung erfüllt für {symbol}: " + ", ".join(reason)
+                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'should_exit_trade', msg, self.transaction_id)
+                send_message(f"[EXIT] {symbol}: {msg}", self.transaction_id)
+                return True
+
+            return False
+
         except Exception as e:
             tb = traceback.format_exc()
             self.data.save_log(LOG_ERROR, self.__class__.__name__, 'should_exit_trade', f"{e}\n{tb}", self.transaction_id)
