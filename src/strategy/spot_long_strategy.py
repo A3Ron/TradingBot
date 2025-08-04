@@ -30,7 +30,20 @@ class SpotLongStrategy(BaseStrategy):
 
             df['signal'] = signal_conditions[0] & signal_conditions[1] & signal_conditions[2]
 
-            if not df['signal'].any():
+            if df['signal'].any():
+                last = df[df['signal']].iloc[-1]
+                msg = (
+                    f"✅ SIGNAL erkannt für {self.market_type.upper()} {self.side.upper()}:\n"
+                    f"Preisänderung={last[self.COL_PRICE_CHANGE]:.4f}, "
+                    f"Volumen={last[self.COL_VOLUME]:.2f}, "
+                    f"RSI={last[self.COL_RSI]:.2f}\n"
+                    f"Entry={last[self.COL_CLOSE]:.4f}, "
+                    f"SL={(last[self.COL_CLOSE] * (1 - self.stop_loss_pct)):.4f}, "
+                    f"TP={(last[self.COL_CLOSE] * (1 + self.take_profit_pct)):.4f}"
+                )
+                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals', msg, transaction_id)
+                send_message(msg, transaction_id)  # optional – kannst du weglassen, wenn du kein Telegram willst
+            else:
                 last = df.iloc[-1]
                 msg = (
                     f"Kein Signal: "

@@ -22,6 +22,7 @@ class BaseTrader:
         self.strategy_config = strategy_config or {}
         self.open_trade: Optional[Dict[str, Any]] = None
         self.mode = config['execution']['mode']
+        self.exchange = None
         self.telegram_token = os.getenv('TELEGRAM_TOKEN', '')
         self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
 
