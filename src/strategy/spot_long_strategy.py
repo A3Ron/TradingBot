@@ -1,11 +1,14 @@
 import pandas as pd
 import traceback
 from .base_strategy import BaseStrategy
-from data.constants import LOG_ERROR, LOG_DEBUG
+from data.constants import LOG_ERROR, LOG_DEBUG, LONG, SPOT
 from telegram import send_message
 
 
 class SpotLongStrategy(BaseStrategy):
+    def __init__(self, strategy_cfg: dict, transaction_id: str):
+        super().__init__(strategy_cfg, transaction_id, market_type=SPOT, side=LONG)
+
     def evaluate_signals(self, df: pd.DataFrame, transaction_id: str) -> pd.DataFrame:
         try:
             df = df.copy()

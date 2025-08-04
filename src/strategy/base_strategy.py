@@ -15,7 +15,7 @@ class BaseStrategy:
     COL_RSI: str = 'rsi'
     COL_VOLUME_SCORE: str = 'volume_score'
 
-    def __init__(self, strategy_cfg: dict, transaction_id: str):
+    def __init__(self, strategy_cfg: dict, transaction_id: str, market_type: str = None, side: str = None):
         self.config = strategy_cfg
         self.params = strategy_cfg.get('params', {})
         self.stop_loss_pct = float(self.params.get('stop_loss_pct', 0.03))
@@ -30,6 +30,8 @@ class BaseStrategy:
         self.rsi_period = int(self.params.get('rsi_period', 14))
         self.price_change_periods = int(self.params.get('price_change_periods', 12))
         self.transaction_id = transaction_id
+        self.market_type = market_type
+        self.side = side
         self.data = DataFetcher()
 
     def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:
