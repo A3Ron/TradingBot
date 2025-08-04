@@ -160,7 +160,7 @@ class BaseTrader:
             exit = self.monitor_trade(
                 df,
                 transaction_id,
-                lambda price: strategy.should_exit_trade(self.open_trade['signal'], price),
+                lambda price: strategy.should_exit_trade(self.open_trade['signal'], price, self.symbol),
                 self.close_fn,
                 self.get_current_position_volume if self.side == 'short' else None
             )
