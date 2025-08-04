@@ -2,6 +2,7 @@ import pandas as pd
 from typing import Optional, Tuple
 from data import DataFetcher
 from data.constants import LOG_WARNING
+from telegram import send_message
 from .trade_signal import TradeSignal
 
 class BaseStrategy:
@@ -47,6 +48,7 @@ class BaseStrategy:
         rsi = df[self.COL_RSI].iloc[-1]
         if pd.isnull(rsi):
             self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_momentum', "RSI ist NaN.")
+            send_message(f"[WARNUNG] {self.__class__.__name__} | should_exit_momentum: RSI ist NaN.")
             return False
         return rsi < self.momentum_exit_rsi if direction == 'long' else rsi > self.momentum_exit_rsi
 
@@ -68,7 +70,9 @@ class BaseStrategy:
                 take_profit=float(last['take_profit']),
                 volume=float(last['volume'])
             )
-        except Exception:
+        except Exception as e:
+            self.data.save_log(LOG_WARNING, self.__class__.__name__, 'generate_signal', f"Fehler: {e}")
+            send_message(f"[FEHLER] {self.__class__.__name__} | generate_signal: {e}")
             return None
 
     def select_best_signal(self, ohlcv_map: dict) -> Optional[Tuple[str, pd.DataFrame]]:
@@ -80,16 +84,20 @@ class BaseStrategy:
                 signal_df = self.evaluate_signals(df)
                 last = signal_df[signal_df['signal'] == True].iloc[-1:]
                 if not last.empty:
-                    rsi = float(last[self.COL_RSI])
-                    price_change = float(last[self.COL_PRICE_CHANGE])
-                    volume = float(last[self.COL_VOLUME])
+                    if self.COL_RSI not in last or self.COL_PRICE_CHANGE not in last:
+                        continue
+                    rsi = float(last[self.COL_RSI].iloc[0])
+                    price_change = float(last[self.COL_PRICE_CHANGE].iloc[0])
+                    volume = float(last[self.COL_VOLUME].iloc[0])
                     rsi_weight = rsi if self.__class__.__name__.lower().startswith('spot') else 100 - rsi
                     score = abs(price_change) * volume * rsi_weight
                     if score > best_score:
                         best_score = score
                         best_symbol = symbol
                         best_df = df
-            except Exception:
+            except Exception as e:
+                self.data.save_log(LOG_WARNING, self.__class__.__name__, 'select_best_signal', f"Fehler bei {symbol}: {e}")
+                send_message(f"[FEHLER] {self.__class__.__name__} | select_best_signal bei {symbol}: {e}")
                 continue
         if best_symbol and best_df is not None:
             return best_symbol, best_df
@@ -98,5 +106,5 @@ class BaseStrategy:
     def should_exit_trade(self, signal: TradeSignal, current_price: float) -> bool:
         sl_hit = current_price <= signal.stop_loss if signal.signal_type == 'long' else current_price >= signal.stop_loss
         tp_hit = current_price >= signal.take_profit if signal.signal_type == 'long' else current_price <= signal.take_profit
-        momentum_exit = self.should_exit_momentum(pd.DataFrame({'close': [current_price]}), direction=signal.signal_type)
+        momentum_exit = False  # nur aktivieren, wenn echter Verlauf vorhanden ist
         return sl_hit or tp_hit or momentum_exit
