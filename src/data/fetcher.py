@@ -68,11 +68,11 @@ class DataFetcher:
             return {}
 
     def update_symbols_from_binance(self):
+        transaction_id = str(uuid.uuid4())
+        self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", "Start", transaction_id)
+
         try:
-            transaction_id = str(uuid.uuid4())
-            spot_exchange = ccxt.binance({
-                "enableRateLimit": True
-            })
+            spot_exchange = ccxt.binance({"enableRateLimit": True})
             futures_exchange = ccxt.binance({
                 "enableRateLimit": True,
                 "options": {"defaultType": "future"}
@@ -81,11 +81,21 @@ class DataFetcher:
             spot_markets = spot_exchange.load_markets()
             futures_markets = futures_exchange.load_markets()
 
+            self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", f"Spot markets loaded: {len(spot_markets)}", transaction_id)
+            self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", f"Futures markets loaded: {len(futures_markets)}", transaction_id)
+
             with get_session() as session:
                 session.query(Symbol).delete()
                 now = datetime.now(timezone.utc)
+                added_symbols = 0
 
                 def build_symbol(market, market_type):
+                    leverage_raw = market.get("info", {}).get("leverage")
+                    try:
+                        leverage = int(leverage_raw) if leverage_raw and str(leverage_raw).isdigit() else None
+                    except:
+                        leverage = None
+
                     return Symbol(
                         symbol_type=market_type,
                         symbol=market.get("symbol"),
@@ -99,42 +109,56 @@ class DataFetcher:
                         is_spot_trading_allowed=market.get("spot"),
                         is_margin_trading_allowed=market.get("margin"),
                         contract_type=market.get("info", {}).get("contractType"),
-                        leverage=market.get("info", {}).get("leverage"),
+                        leverage=leverage,
                         exchange="binance",
                         created_at=now,
                         updated_at=now
                     )
 
+                # Spot
                 for market in spot_markets.values():
                     if market.get("active") and market.get("quote") == "USDT":
                         try:
-                            session.add(build_symbol(market, "spot"))
+                            symbol = build_symbol(market, "spot")
+                            session.add(symbol)
+                            session.flush()
+                            added_symbols += 1
                         except Exception as e:
-                            self.save_log("ERROR", "fetcher", "update_symbols_from_binance", f"Fehler beim Hinzufügen von Spot-Symbol {market.get('symbol')}: {e}", transaction_id)
-                            send_message(f"❌ Fehler beim Hinzufügen von Spot-Symbol {market.get('symbol')}: {e}", transaction_id)
+                            msg = f"Fehler beim Hinzufügen von Spot-Symbol {market.get('symbol')}: {e}"
+                            self.save_log("ERROR", "fetcher", "update_symbols_from_binance", msg, transaction_id)
+                            send_message(f"❌ {msg}", transaction_id)
 
+                # Futures
                 for market in futures_markets.values():
                     if (
                         market.get("active") and
                         market.get("quote") == "USDT" and
                         market.get("contractType") == "PERPETUAL" and
                         market.get("linear") is True
-                        ):
+                    ):
                         try:
-                            session.add(build_symbol(market, "futures"))
+                            symbol = build_symbol(market, "futures")
+                            session.add(symbol)
+                            session.flush()
+                            added_symbols += 1
                         except Exception as e:
-                            self.save_log("ERROR", "fetcher", "update_symbols_from_binance", f"Fehler beim Hinzufügen von Futures-Symbol {market.get('symbol')}: {e}", transaction_id)
-                            send_message(f"❌ Fehler beim Hinzufügen von Futures-Symbol {market.get('symbol')}: {e}", transaction_id)
+                            msg = f"Fehler beim Hinzufügen von Futures-Symbol {market.get('symbol')}: {e}"
+                            self.save_log("ERROR", "fetcher", "update_symbols_from_binance", msg, transaction_id)
+                            send_message(f"❌ {msg}", transaction_id)
 
-            session.commit()
+                self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", f"Commit wird ausgeführt ({added_symbols} Symbole)", transaction_id)
+                session.commit()
+                self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", "Symbol-Update commit abgeschlossen", transaction_id)
 
-            self._last_symbol_update = now.timestamp()
-            return self._last_symbol_update
+                self._last_symbol_update = now.timestamp()
+                return self._last_symbol_update
+
         except Exception as e:
             msg = f"Fehler beim Aktualisieren der Symbole von Binance: {e}\n{traceback.format_exc()}"
             self.save_log("ERROR", "fetcher", "update_symbols_from_binance", msg, transaction_id)
             send_message(msg, transaction_id)
             return None
+
 
     def get_last_open_trade(self, symbol: str, side: str, market_type: str):
         with get_session() as session:
