@@ -6,8 +6,8 @@ from telegram import send_message
 
 
 class SpotLongStrategy(BaseStrategy):
-    def __init__(self, strategy_cfg: dict, transaction_id: str):
-        super().__init__(strategy_cfg, transaction_id, market_type=SPOT, side=LONG)
+    def __init__(self, strategy_cfg: dict, transaction_id: str, timeframe: str = '1m'):
+        super().__init__(strategy_cfg, transaction_id, timeframe=timeframe, market_type=SPOT, side=LONG)
 
     def evaluate_signals(self, df: pd.DataFrame, transaction_id: str) -> pd.DataFrame:
         try:

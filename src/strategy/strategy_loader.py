@@ -8,12 +8,13 @@ from telegram.message import send_message
 
 def get_strategy(config, transaction_id: str):
     name = config.get('strategy', {}).get('name', 'high_volatility_breakout_momentum')
+    timeframe = config.get('trading', {}).get('timeframe', '1m')
+
     if name != 'high_volatility_breakout_momentum':
         raise ValueError("Nur 'high_volatility_breakout_momentum' wird unterstützt.")
 
     # Robust relativer Pfad zur Strategie-Datei
     strategy_path = os.path.join(os.path.dirname(__file__), 'strategy_high_volatility_breakout_momentum.yaml')
-    timeframe = config.get('trading', {}).get('timeframe', '1m')
 
     try:
         with open(strategy_path, encoding="utf-8") as f:
