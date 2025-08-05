@@ -7,7 +7,7 @@ class Log(Base, TimestampMixin):
 
     id = Column(UUID, primary_key=True, server_default=text('gen_random_uuid()'))
     transaction_id = Column(UUID, index=True)
-    timestamp = Column(DateTime, index=True, default=lambda: datetime.now(timezone.utc))
+    timestamp = Column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
     level = Column(String(16), index=True)
     source = Column(String(64))
     method = Column(String(64))
