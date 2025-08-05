@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import traceback
 from typing import Optional, Dict, Any, Callable
 import os
 import uuid
@@ -7,6 +8,7 @@ import pandas as pd
 
 from data import DataFetcher
 from data.trades import open_trade, close_trade
+from models.signal import Signal
 from telegram import send_message
 from data.constants import LOG_INFO, LOG_WARNING, LOG_ERROR, SPOT
 
@@ -117,7 +119,6 @@ class BaseTrader:
 
         try:
             order = entry_fn(volume, tx_id)
-            send_message(f"{self.side.upper()} Trade ausgeführt: {self.symbol} @ {signal.entry} Vol: {volume}")
 
             open_trade(
                 symbol_id=self.data.get_symbol_id(self.symbol),
@@ -133,6 +134,8 @@ class BaseTrader:
                 extra=order if isinstance(order, dict) else None,
                 transaction_id=tx_id
             )
+            send_message(f"{self.side.upper()} Trade ausgeführt: {self.symbol} @ {signal.entry} Vol: {volume}")
+            self._log(LOG_INFO, 'execute_trade', f"Trade ausgeführt: {self.symbol} @ {signal.entry} Vol: {volume}", tx_id)
 
             return order
         except Exception as e:
@@ -183,8 +186,9 @@ class BaseTrader:
                 self.open_trade = None
                 return 'closed'
             except Exception as e:
-                self._log(LOG_ERROR, 'monitor_trade', f"Fehler beim Schließen: {e}", tx_id)
-                send_message(f"[FEHLER] Trade konnte nicht geschlossen werden: {self.symbol} {e}")
+                tb = traceback.format_exc()
+                self._log(LOG_ERROR, 'monitor_trade', f"Fehler beim Schließen: {e}\n{tb}", tx_id)
+                send_message(f"[FEHLER] Trade konnte nicht geschlossen werden: {self.symbol} {e}\n{tb}")
         return None
 
     def handle_trades(self, strategy, ohlcv_list, transaction_id: str):
@@ -193,8 +197,6 @@ class BaseTrader:
         if df is None or df.empty:
             self._log(LOG_WARNING, 'handle_trades', f"Keine OHLCV-Daten für {self.symbol}", transaction_id)
             return
-
-        signal = strategy.generate_signal(df)
 
         if self.open_trade:
             exit = self.monitor_trade(
@@ -206,7 +208,21 @@ class BaseTrader:
             )
             if exit == 'closed':
                 self._log(LOG_INFO, 'handle_trades', f"Trade geschlossen für {self.symbol}", transaction_id)
-        elif signal and self.validate_signal(signal, transaction_id):
-            self.execute_trade(signal, transaction_id, self.entry_fn)
         else:
-            self._log(LOG_WARNING, 'handle_trades', f"Ungültiges Signal für {self.symbol}: {signal}", transaction_id)
+            try:
+                last = df[df['signal'] == True].iloc[-1]
+                signal = self._create_signal_from_row(last)
+                self.execute_trade(signal, transaction_id, self.entry_fn)
+            except Exception as e:
+                tb = traceback.format_exc()
+                self._log(LOG_ERROR, 'handle_trades', f"Fehler beim Ausführen des Trades: {e}\n{tb}", transaction_id)
+                send_message(f"[FEHLER] Trade konnte nicht ausgeführt werden: {self.symbol} {e}\n{tb}", transaction_id)
+
+    def _create_signal_from_row(self, row):
+        return Signal(
+            signal_type=self.side,
+            entry=float(row['entry']),
+            stop_loss=float(row['stop_loss']),
+            take_profit=float(row['take_profit']),
+            volume=float(row['volume'])
+        )
