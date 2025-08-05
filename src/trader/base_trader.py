@@ -61,6 +61,7 @@ class BaseTrader:
         usdt_available = balance['total'].get('USDT', 0)
         stake_percent = float(self.strategy_config.get("stake_percent", 0.05))
         return usdt_available * stake_percent
+
     def validate_signal(self, signal, tx_id: str) -> bool:
         required = ['entry', 'stop_loss', 'take_profit', 'volume']
         for f in required:
@@ -104,13 +105,28 @@ class BaseTrader:
         try:
             order = entry_fn(volume, tx_id)
             send_message(f"{self.side.upper()} Trade ausgeführt: {self.symbol} @ {signal.entry} Vol: {volume}")
-            open_trade(tx_id, self.symbol, self.market_type, self.side, signal, volume, signal.entry, signal.stop_loss, signal.take_profit, order)
+
+            open_trade(
+                symbol_id=self.data.get_symbol_id(self.symbol),
+                symbol_name=self.symbol,
+                market_type=self.market_type,
+                side=self.side,
+                volume=volume,
+                entry_price=signal.entry,
+                stop_loss_price=signal.stop_loss,
+                take_profit_price=signal.take_profit,
+                signal_volume=signal.volume,
+                order_identifier=order,
+                extra=None,
+                transaction_id=tx_id
+            )
+
             return order
         except Exception as e:
             self._log(LOG_ERROR, 'execute_trade', f"Order fehlgeschlagen: {e}", tx_id)
             send_message(f"[FEHLER] Order fehlgeschlagen {self.symbol}: {e}")
             return None
-        
+
     def fetch_short_position_volume(self, tx_id: str) -> float:
         try:
             positions = self.exchange.fetch_positions([self.symbol])
