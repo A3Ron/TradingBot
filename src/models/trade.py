@@ -11,7 +11,7 @@ class Trade(Base, TimestampMixin):
     parent_trade_id = Column(UUID, ForeignKey('trades.id'), index=True, nullable=True)
     symbol_id = Column(UUID, ForeignKey('symbols.id'), index=True)
     market_type = Column(String(16), index=True)
-    Column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
+    timestamp = Column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
     side = Column(String(8))
     status = Column(String(20))
     trade_volume = Column(Float)
