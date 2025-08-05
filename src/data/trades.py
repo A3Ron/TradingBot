@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from models.trade import Trade
@@ -39,7 +39,7 @@ def open_trade(
             fee_paid=0.0,
             profit_realized=None,
             extra=extra,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
         session.add(trade)
         session.commit()
@@ -75,7 +75,7 @@ def close_trade(
         trade.exit_reason = exit_reason
         trade.fee_paid = fee_paid
         trade.raw_order_data = raw_order_data
-        trade.timestamp = datetime.utcnow()
+        trade.timestamp = datetime.now(timezone.utc)
 
         session.commit()
         session.refresh(trade)
