@@ -1,10 +1,11 @@
 import pandas as pd
 import traceback
 from typing import Optional, Tuple
+from models.trade import Trade
 from data import DataFetcher
 from data.constants import LOG_WARNING, LOG_ERROR, LOG_DEBUG
 from telegram import send_message
-from .trade_signal import TradeSignal
+
 
 class BaseStrategy:
     COL_CLOSE: str = 'close'
@@ -69,7 +70,7 @@ class BaseStrategy:
             return entry
         return None
 
-    def generate_signal(self, df: pd.DataFrame) -> Optional[TradeSignal]:
+    def generate_signal(self, df: pd.DataFrame) -> Optional[dict]:
         try:
             signal_df = self.evaluate_signals(df, self.transaction_id)
             valid_signals = signal_df[signal_df['signal'] == True]
@@ -77,23 +78,21 @@ class BaseStrategy:
                 return None
 
             last = valid_signals.iloc[-1]
-
             signal_type = 'long' if self.__class__.__name__.lower().startswith('spot') else 'short'
 
-            return TradeSignal(
-                signal_type=signal_type,
-                entry=float(last['entry']),
-                stop_loss=float(last['stop_loss']),
-                take_profit=float(last['take_profit']),
-                volume=float(last['volume']) if pd.api.types.is_scalar(last['volume']) else float(last['volume'].values[0])
-            )
+            return {
+                'signal_type': signal_type,
+                'entry': float(last['entry']),
+                'stop_loss': float(last['stop_loss']),
+                'take_profit': float(last['take_profit']),
+                'volume': float(last['volume']) if pd.api.types.is_scalar(last['volume']) else float(last['volume'].values[0])
+            }
 
         except Exception as e:
             tb = traceback.format_exc()
             self.data.save_log(LOG_ERROR, self.__class__.__name__, 'generate_signal', f"{e}\n{tb}", self.transaction_id)
             send_message(f"[FEHLER] {self.__class__.__name__} | generate_signal: {e}\n{tb}", self.transaction_id)
             return None
-
 
     def select_best_signal(self, ohlcv_map: dict) -> Optional[Tuple[str, pd.DataFrame]]:
         best_score = -float('inf')
@@ -122,11 +121,11 @@ class BaseStrategy:
             return best_symbol, best_df
         return None
 
-    def should_exit_trade(self, signal: TradeSignal, current_price: float, symbol: str) -> bool:
+    def should_exit_trade(self, trade: Trade, current_price: float, symbol: str) -> bool:
         try:
             # 1. Stop-Loss und Take-Profit prüfen
-            sl_hit = current_price <= signal.stop_loss if signal.signal_type == 'long' else current_price >= signal.stop_loss
-            tp_hit = current_price >= signal.take_profit if signal.signal_type == 'long' else current_price <= signal.take_profit
+            sl_hit = current_price <= trade.stop_loss_price if trade.side == 'long' else current_price >= trade.stop_loss_price
+            tp_hit = current_price >= trade.take_profit_price if trade.side == 'long' else current_price <= trade.take_profit_price
 
             # 2. RSI-Momentum-Exit prüfen (basierend auf echten 1m-Candles)
             ohlcv = self.data.fetch_ohlcv(symbol, timeframe='1m', limit=self.rsi_period + 1)
@@ -137,15 +136,15 @@ class BaseStrategy:
                 return False
 
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            momentum_exit = self.should_exit_momentum(df, direction=signal.signal_type)
+            momentum_exit = self.should_exit_momentum(df, direction=trade.side)
 
-            # 3. Trailing Stop prüfen (wenn über Trigger-Gewinn)
-            trailing_stop = self.get_trailing_stop(signal.entry, current_price, direction=signal.signal_type)
+            # 3. Trailing Stop prüfen
+            trailing_stop = self.get_trailing_stop(trade.entry_price, current_price, direction=trade.side)
             trailing_exit = False
             if trailing_stop is not None:
-                if signal.signal_type == 'long' and current_price < trailing_stop:
+                if trade.side == 'long' and current_price < trailing_stop:
                     trailing_exit = True
-                elif signal.signal_type == 'short' and current_price > trailing_stop:
+                elif trade.side == 'short' and current_price > trailing_stop:
                     trailing_exit = True
 
             # 4. Logging
