@@ -1,15 +1,16 @@
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, Callable
 import os
 import uuid
-from typing import Optional, Dict, Any, Callable
-from datetime import datetime, timezone
-
 import ccxt
+
 from data import DataFetcher
 from data.trades import open_trade, close_trade
 from telegram import send_message
 from data.constants import LOG_INFO, LOG_WARNING, LOG_ERROR, SPOT
 
 EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
+
 
 class BaseTrader:
     def __init__(self, config: dict, symbol: str, market_type: str, side: str,
@@ -21,7 +22,7 @@ class BaseTrader:
         self.side = side
         self.data = data_fetcher or DataFetcher()
         self.strategy_config = strategy_config or {}
-        self.open_trade: Optional[Dict[str, Any]] = None
+        self.open_trade = None  # Typ: Optional[Trade]
         self.mode = config['execution']['mode']
         self.exchange = None
 
@@ -74,20 +75,9 @@ class BaseTrader:
                     return False
         return True
 
-    def _dict_to_obj(self, d):
-        class Obj: pass
-        o = Obj()
-        for k, v in d.items():
-            setattr(o, k, v)
-        return o
-
     def load_open_trade(self, tx_id: str):
         trade = self.data.get_last_open_trade(self.symbol, self.side, self.market_type)
         if trade:
-            if hasattr(trade.get('signal'), 'to_dict'):
-                trade['signal'] = self._dict_to_obj(trade['signal'].to_dict())
-            else:
-                trade['signal'] = self._dict_to_obj(trade['signal'])
             self.open_trade = trade
         else:
             self._log(LOG_INFO, 'load_open_trade', f"Kein offener Trade für {self.symbol}", tx_id)
@@ -145,32 +135,28 @@ class BaseTrader:
         if not self.open_trade:
             return None
 
-        signal = self.open_trade['signal']
         current_price = df['close'].iloc[-1]
         now = datetime.now(timezone.utc)
-        trade_time = self.open_trade.get('timestamp')
-
-        if isinstance(trade_time, str):
-            trade_time = datetime.fromisoformat(trade_time.replace('Z', '+00:00'))
+        trade_time = self.open_trade.timestamp
 
         cooldown_active = trade_time and (now - trade_time).total_seconds() < EXIT_COOLDOWN_SECONDS
 
         if exit_condition(current_price):
-            is_stop_loss_hit = (current_price <= signal.stop_loss) if self.side == 'long' else (current_price >= signal.stop_loss)
-            is_take_profit_hit = (current_price >= signal.take_profit) if self.side == 'long' else (current_price <= signal.take_profit)
+            is_stop_loss_hit = (current_price <= self.open_trade.stop_loss_price) if self.side == 'long' else (current_price >= self.open_trade.stop_loss_price)
+            is_take_profit_hit = (current_price >= self.open_trade.take_profit_price) if self.side == 'long' else (current_price <= self.open_trade.take_profit_price)
 
             if cooldown_active and not (is_stop_loss_hit or is_take_profit_hit):
                 self._log(LOG_INFO, 'monitor_trade', f"Ausstieg blockiert durch Cooldown ({self.symbol})", tx_id)
                 return None
 
-            volume = fetch_position_fn(tx_id) if fetch_position_fn else self.open_trade.get('trade_volume') or signal.volume
+            volume = fetch_position_fn(tx_id) if fetch_position_fn else self.open_trade.trade_volume
             volume = self.round_volume(volume)
 
             try:
                 close_fn(volume, tx_id)
                 self._log(LOG_INFO, 'monitor_trade', f"{self.symbol} geschlossen @ {current_price} Vol: {volume}", tx_id)
                 send_message(f"Trade geschlossen: {self.symbol} @ {current_price}")
-                close_trade(tx_id, self.symbol, self.market_type, self.side, current_price)
+                close_trade(self.open_trade.id, current_price, "exit-condition")
                 self.open_trade = None
                 return 'closed'
             except Exception as e:
@@ -191,7 +177,7 @@ class BaseTrader:
             exit = self.monitor_trade(
                 df,
                 transaction_id,
-                lambda price: strategy.should_exit_trade(self.open_trade['signal'], price, self.symbol),
+                lambda price: strategy.should_exit_trade(self.open_trade, price, self.symbol),
                 self.close_fn,
                 self.get_current_position_volume if self.side == 'short' else None
             )
