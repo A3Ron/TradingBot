@@ -73,7 +73,7 @@ class BaseTrader:
             try:
                 if value is None or pd.isnull(value):
                     return False
-                float(value)  # erlaubt auch numerische Strings wie "45.2"
+                float(value)
                 return True
             except:
                 return False
@@ -192,37 +192,30 @@ class BaseTrader:
         return None
 
     def handle_trades(self, strategy, ohlcv_list, transaction_id: str):
-        self.load_open_trade(transaction_id)
-        df = ohlcv_list.get(self.symbol)
-        if df is None or df.empty:
-            self._log(LOG_WARNING, 'handle_trades', f"Keine OHLCV-Daten für {self.symbol}", transaction_id)
-            return
+        try:
+            self.load_open_trade(transaction_id)
+            df = ohlcv_list.get(self.symbol)
+            if df is None or df.empty:
+                self._log(LOG_WARNING, 'handle_trades', f"Keine OHLCV-Daten für {self.symbol}", transaction_id)
+                return
 
-        if self.open_trade:
-            exit = self.monitor_trade(
-                df,
-                transaction_id,
-                lambda price: strategy.should_exit_trade(self.open_trade, price, self.symbol),
-                self.close_fn,
-                self.get_current_position_volume if self.side == 'short' else None
-            )
-            if exit == 'closed':
-                self._log(LOG_INFO, 'handle_trades', f"Trade geschlossen für {self.symbol}", transaction_id)
-        else:
-            try:
-                last = df[df['signal'] == True].iloc[-1]
-                signal = self._create_signal_from_row(last)
-                self.execute_trade(signal, transaction_id, self.entry_fn)
-            except Exception as e:
-                tb = traceback.format_exc()
-                self._log(LOG_ERROR, 'handle_trades', f"Fehler beim Ausführen des Trades: {e}\n{tb}", transaction_id)
-                send_message(f"[FEHLER] Trade konnte nicht ausgeführt werden: {self.symbol} {e}\n{tb}", transaction_id)
-
-    def _create_signal_from_row(self, row):
-        return Signal(
-            signal_type=self.side,
-            entry=float(row['entry']),
-            stop_loss=float(row['stop_loss']),
-            take_profit=float(row['take_profit']),
-            volume=float(row['volume'])
-        )
+            if self.open_trade:
+                exit = self.monitor_trade(
+                    df,
+                    transaction_id,
+                    lambda price: strategy.should_exit_trade(self.open_trade, price, self.symbol),
+                    self.close_fn,
+                    self.get_current_position_volume if self.side == 'short' else None
+                )
+                if exit == 'closed':
+                    self._log(LOG_INFO, 'handle_trades', f"Trade geschlossen für {self.symbol}", transaction_id)
+            else:
+                signal = strategy.generate_signal(df)
+                if signal and self.validate_signal(signal, transaction_id):
+                    self.execute_trade(signal, transaction_id, self.entry_fn)
+                else:
+                    self._log(LOG_WARNING, 'handle_trades', f"Ungültiges Signal für {self.symbol}: {signal}", transaction_id)
+        except Exception as e:
+            tb = traceback.format_exc()
+            self._log(LOG_ERROR, 'handle_trades', f"Fehler in handle_trades: {e}\n{tb}", transaction_id)
+            send_message(f"[FEHLER] handle_trades {self.symbol}: {e}\n{tb}")

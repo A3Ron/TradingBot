@@ -52,6 +52,21 @@ class DataFetcher:
 
         return ohlcv_map
 
+
+    def fetch_ohlcv_single(self, symbol, market_type, timeframe, transaction_id, limit):
+        exchange = ccxt.binance({
+            "enableRateLimit": True,
+            "options": {"defaultType": market_type}
+        })
+
+        try:
+            data = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            return data
+        except Exception as e:
+            self.save_log("ERROR", "fetcher", "fetch_ohlcv_single", f"Fehler bei {symbol}: {e}", transaction_id)
+            send_message(f"❌ Fehler beim Laden von OHLCV für {symbol}: {e}", transaction_id)
+            return []
+
     def fetch_binance_tickers(self, transaction_id: str = None) -> dict:
         transaction_id = transaction_id or str(uuid.uuid4())
 

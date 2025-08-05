@@ -128,7 +128,16 @@ class BaseStrategy:
             tp_hit = current_price >= trade.take_profit_price if trade.side == 'long' else current_price <= trade.take_profit_price
 
             # 2. RSI-Momentum-Exit prüfen
-            ohlcv = self.data.fetch_ohlcv(symbol, timeframe='1m', limit=self.rsi_period + 1)
+            if not self.market_type or not self.transaction_id:
+                raise ValueError("market_type oder transaction_id fehlt in Strategy-Instanz")
+
+            ohlcv = self.data.fetch_ohlcv_single(
+                symbol,
+                self.market_type,
+                self.transaction_id,
+                timeframe='1m',
+                limit=self.rsi_period + 1
+            )
             if not ohlcv or len(ohlcv) < self.rsi_period:
                 msg = f"Nicht genügend OHLCV-Daten für RSI-Berechnung bei {symbol}"
                 self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_trade', msg, self.transaction_id)
