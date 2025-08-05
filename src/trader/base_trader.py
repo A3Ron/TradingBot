@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any, Callable
 import os
 import uuid
 import ccxt
+import pandas as pd
 
 from data import DataFetcher
 from data.trades import open_trade, close_trade
@@ -64,16 +65,38 @@ class BaseTrader:
         return usdt_available * stake_percent
 
     def validate_signal(self, signal, tx_id: str) -> bool:
-        required = ['entry', 'stop_loss', 'take_profit', 'volume']
-        for f in required:
-            v = getattr(signal, f, None)
-            if v is None or not isinstance(v, (int, float)):
-                try:
-                    float(v)
-                except:
-                    self._log(LOG_ERROR, 'validate_signal', f"Ungültiges Feld {f}: {v}", tx_id)
+        valid = True
+
+        def is_number(value):
+            try:
+                if value is None or pd.isnull(value):
                     return False
-        return True
+                float(value)  # erlaubt auch numerische Strings wie "45.2"
+                return True
+            except:
+                return False
+
+        checks = {
+            'entry': signal.entry,
+            'stop_loss': signal.stop_loss,
+            'take_profit': signal.take_profit,
+            'volume': signal.volume
+        }
+
+        for field, value in checks.items():
+            if not is_number(value):
+                self._log(LOG_ERROR, 'validate_signal', f"Ungültiges Feld '{field}': {value}", tx_id)
+                valid = False
+
+        if valid and signal.volume <= 0:
+            self._log(LOG_ERROR, 'validate_signal', f"Signal-Volumen ist <= 0: {signal.volume}", tx_id)
+            valid = False
+
+        if valid and not (signal.entry > signal.stop_loss and signal.take_profit > signal.entry):
+            self._log(LOG_WARNING, 'validate_signal', f"Signal-Level inkonsistent: Entry {signal.entry}, SL {signal.stop_loss}, TP {signal.take_profit}", tx_id)
+            valid = False
+
+        return valid
 
     def load_open_trade(self, tx_id: str):
         trade = self.data.get_last_open_trade(self.symbol, self.side, self.market_type)
