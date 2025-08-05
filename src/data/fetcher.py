@@ -103,7 +103,11 @@ class DataFetcher:
 
             for market in spot_markets.values():
                 if market.get("active") and market.get("quote") == "USDT":
-                    session.add(build_symbol(market, "spot"))
+                    try:
+                        session.add(build_symbol(market, "spot"))
+                    except Exception as e:
+                        self.save_log("ERROR", "fetcher", "update_symbols_from_binance", f"Fehler beim Hinzufügen von Spot-Symbol {market.get('symbol')}: {e}", transaction_id)
+                        send_message(f"❌ Fehler beim Hinzufügen von Spot-Symbol {market.get('symbol')}: {e}", uuid.uuid4())
 
             for market in futures_markets.values():
                 if (
@@ -111,9 +115,13 @@ class DataFetcher:
                     market.get("quote") == "USDT" and
                     market.get("contractType") == "PERPETUAL" and
                     market.get("linear") is True
-                    ):      
-                    session.add(build_symbol(market, "futures"))
-        
+                    ):
+                    try:
+                        session.add(build_symbol(market, "futures"))
+                    except Exception as e:
+                        self.save_log("ERROR", "fetcher", "update_symbols_from_binance", f"Fehler beim Hinzufügen von Futures-Symbol {market.get('symbol')}: {e}", transaction_id)
+                        send_message(f"❌ Fehler beim Hinzufügen von Futures-Symbol {market.get('symbol')}: {e}", uuid.uuid4())
+
         session.commit()
 
         self._last_symbol_update = now.timestamp()
