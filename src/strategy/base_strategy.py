@@ -16,7 +16,7 @@ class BaseStrategy:
     COL_RSI: str = 'rsi'
     COL_VOLUME_SCORE: str = 'volume_score'
 
-    def __init__(self, strategy_cfg: dict, transaction_id: str, market_type: str = None, side: str = None):
+    def __init__(self, strategy_cfg: dict, transaction_id: str, timeframe: str = '1m', market_type: str = None, side: str = None):
         self.config = strategy_cfg
         self.params = strategy_cfg.get('params', {})
         self.stop_loss_pct = float(self.params.get('stop_loss_pct', 0.03))
@@ -33,6 +33,7 @@ class BaseStrategy:
         self.transaction_id = transaction_id
         self.market_type = market_type
         self.side = side
+        self.timeframe = timeframe
         self.data = DataFetcher()
 
     def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:
@@ -132,12 +133,13 @@ class BaseStrategy:
                 raise ValueError("market_type oder transaction_id fehlt in Strategy-Instanz")
 
             ohlcv = self.data.fetch_ohlcv_single(
-                symbol,
-                self.market_type,
-                self.transaction_id,
-                timeframe='1m',
+                symbol=symbol,
+                market_type=self.market_type,
+                timeframe= self.timeframe,
+                transaction_id=self.transaction_id,
                 limit=self.rsi_period + 1
             )
+
             if not ohlcv or len(ohlcv) < self.rsi_period:
                 msg = f"Nicht genügend OHLCV-Daten für RSI-Berechnung bei {symbol}"
                 self.data.save_log(LOG_WARNING, self.__class__.__name__, 'should_exit_trade', msg, self.transaction_id)

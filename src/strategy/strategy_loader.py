@@ -13,6 +13,7 @@ def get_strategy(config, transaction_id: str):
 
     # Robust relativer Pfad zur Strategie-Datei
     strategy_path = os.path.join(os.path.dirname(__file__), 'strategy_high_volatility_breakout_momentum.yaml')
+    timeframe = config.get('trading', {}).get('timeframe', '1m')
 
     try:
         with open(strategy_path, encoding="utf-8") as f:
@@ -22,6 +23,6 @@ def get_strategy(config, transaction_id: str):
         raise RuntimeError(f"Fehler beim Laden der Strategie-Konfiguration: {e}")
 
     return {
-        'spot_long': SpotLongStrategy(strategy_cfg, transaction_id),
-        'futures_short': FuturesShortStrategy(strategy_cfg, transaction_id)
+        'spot_long': SpotLongStrategy(strategy_cfg, transaction_id, timeframe=timeframe),
+        'futures_short': FuturesShortStrategy(strategy_cfg, transaction_id, timeframe=timeframe)
     }
