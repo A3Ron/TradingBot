@@ -168,3 +168,10 @@ class DataFetcher:
                 market_type=market_type,
                 status="open"
             ).order_by(Trade.timestamp.desc()).first()
+        
+    def get_symbol_id(self, symbol_name: str):
+        with get_session() as session:
+            symbol = session.query(Symbol).filter_by(name=symbol_name).first()
+            if not symbol:
+                raise ValueError(f"Symbol {symbol_name} nicht in DB gefunden.")
+            return symbol.id
