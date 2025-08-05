@@ -110,6 +110,7 @@ class BaseTrader:
             self._log(LOG_ERROR, 'execute_trade', f"Order fehlgeschlagen: {e}", tx_id)
             send_message(f"[FEHLER] Order fehlgeschlagen {self.symbol}: {e}")
             return None
+        
     def fetch_short_position_volume(self, tx_id: str) -> float:
         try:
             positions = self.exchange.fetch_positions([self.symbol])
