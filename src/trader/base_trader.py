@@ -116,8 +116,8 @@ class BaseTrader:
                 stop_loss_price=signal.stop_loss,
                 take_profit_price=signal.take_profit,
                 signal_volume=signal.volume,
-                order_identifier=order,
-                extra=None,
+                order_identifier=order.get("id") if isinstance(order, dict) else None,
+                extra=order if isinstance(order, dict) else None,
                 transaction_id=tx_id
             )
 
