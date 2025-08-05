@@ -68,14 +68,14 @@ class DataFetcher:
             return {}
 
     def update_symbols_from_binance(self):
-        exchange_spot = ccxt.binance({"enableRateLimit": True})
-        exchange_futures = ccxt.binance({
+        spot_exchange = ccxt.binance({"enableRateLimit": True})
+        futures_exchange = ccxt.binance({
             "enableRateLimit": True,
             "options": {"defaultType": "future"}
         })
 
-        spot_markets = exchange_spot.load_markets()
-        futures_markets = exchange_futures.load_markets()
+        spot_markets = spot_exchange.load_markets()
+        futures_markets = futures_exchange.load_markets()
 
         with get_session() as session:
             session.query(Symbol).delete()
@@ -106,10 +106,15 @@ class DataFetcher:
                     session.add(build_symbol(market, "spot"))
 
             for market in futures_markets.values():
-                if market.get("active") and market.get("quote") == "USDT":
+                if (
+                    market.get("active") and
+                    market.get("quote") == "USDT" and
+                    market.get("contractType") == "PERPETUAL" and
+                    market.get("linear") is True
+                    ):      
                     session.add(build_symbol(market, "futures"))
-
-            session.commit()
+        
+        session.commit()
 
         self._last_symbol_update = now.timestamp()
         return self._last_symbol_update
