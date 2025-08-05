@@ -27,6 +27,8 @@ EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
 SYMBOL_UPDATE_INTERVAL = 43200  # 12 Stunden
 
 last_symbol_update = 0
+main_loop_active = True
+force_symbol_update_on_start = True
 startup_sent = False
 
 
@@ -113,14 +115,13 @@ except Exception as e:
     price_change_periods = 20
     send_message(f"Fehler beim Laden der Strategie-Config: {e}\n{traceback.format_exc()}")
 
-main_loop_active = True
-
 while main_loop_active:
     transaction_id = str(uuid.uuid4())
 
     try:
         current_time = time.time()
-        if current_time - last_symbol_update > SYMBOL_UPDATE_INTERVAL:
+        if force_symbol_update_on_start or (current_time - last_symbol_update > SYMBOL_UPDATE_INTERVAL):
+            force_symbol_update_on_start = False
             data_fetcher.update_symbols_from_binance()
             last_symbol_update = current_time
             startup_sent = False
