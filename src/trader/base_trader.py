@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import math
 import traceback
 from typing import Optional, Dict, Any, Callable
 import os
@@ -13,7 +14,6 @@ from telegram import send_message
 from data.constants import LOG_INFO, LOG_WARNING, LOG_ERROR, SPOT
 
 EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
-
 
 class BaseTrader:
     def __init__(self, config: dict, symbol: str, market_type: str, side: str,
@@ -38,26 +38,48 @@ class BaseTrader:
 
     def create_binance_exchange(self, default_type=SPOT):
         try:
-            return ccxt.binance({
+            self.exchange = ccxt.binance({
                 'apiKey': os.getenv('BINANCE_API_KEY'),
                 'secret': os.getenv('BINANCE_API_SECRET'),
                 'enableRateLimit': True,
                 'options': {'defaultType': default_type}
             })
+
+            # Hole step size für symbol
+            market = self.exchange.market(self.symbol)
+            self.lot_step = float(market['limits']['amount']['min'])
+
+            return self.exchange
         except Exception as e:
             raise RuntimeError(f"Fehler beim Binance-Setup: {e}")
 
     def round_volume(self, volume: float) -> float:
         try:
             market = self.exchange.market(self.symbol)
+
+            # 1. Step-Größe aus 'MARKET_LOT_SIZE' herausfinden
+            step = None
+            if 'info' in market and 'filters' in market['info']:
+                for f in market['info']['filters']:
+                    if f['filterType'] == 'MARKET_LOT_SIZE':
+                        step = float(f['stepSize'])
+                        break
+
+            # 2. Wenn Step vorhanden: sauber runden
+            if step:
+                rounded = math.floor(volume / step) * step
+                if rounded <= 0:
+                    self._log(LOG_WARNING, 'round_volume', f"Gerundetes Volumen ist 0 – Original: {volume}, Step: {step}", str(uuid.uuid4()))
+                return rounded
+
+            # 3. Fallback: Präzision
             precision = market.get('precision', {}).get('amount')
             if precision is not None:
                 return round(volume, int(precision))
-            step = market.get('limits', {}).get('amount', {}).get('step')
-            if step:
-                return (volume // step) * step
+
         except Exception as e:
             self._log(LOG_WARNING, 'round_volume', str(e), str(uuid.uuid4()))
+
         return round(volume, 6)
 
     def calculate_stake_quote_amount(self) -> float:
