@@ -30,7 +30,6 @@ main_loop_active = True
 force_symbol_update_on_start = True
 startup_sent = False
 
-
 def resolve_env_vars(obj):
     if isinstance(obj, dict):
         return {k: resolve_env_vars(v) for k, v in obj.items()}
@@ -40,18 +39,17 @@ def resolve_env_vars(obj):
         return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), ""), obj)
     return obj
 
+def get_quote_assets():
+    quotes = {row['quote_asset'] for row in data_fetcher.get_all_symbols(symbol_type=None) if row.get('quote_asset')}
+    return sorted(quotes, key=lambda x: -len(x))
 
-def symbol_db_to_ccxt(symbol, all_db_symbols=None):
-    quotes = set(row['quote_asset'] for row in data_fetcher.get_all_symbols(symbol_type=None) if 'quote_asset' in row and row['quote_asset'])
-    quotes = sorted(quotes, key=lambda x: -len(x))
+def symbol_db_to_ccxt(symbol, quotes):
     if '/' in symbol:
         return symbol
     for quote in quotes:
         if symbol.endswith(quote):
-            base = symbol[:-len(quote)]
-            return f"{base}/{quote}"
+            return f"{symbol[:-len(quote)]}/{quote}"
     return symbol
-
 
 def format_startup_message(config, spot_symbols, futures_symbols):
     init_symbol = spot_symbols[0] if spot_symbols else (futures_symbols[0] if futures_symbols else '')
@@ -92,7 +90,6 @@ def format_startup_message(config, spot_symbols, futures_symbols):
         f"Futures-Symbole ({len(futures_symbols)}): {', '.join(futures_symbols)}\n"
     )
 
-
 # --- Initialisierung ---
 load_dotenv()
 data_fetcher = DataFetcher()
@@ -114,6 +111,8 @@ except Exception as e:
     price_change_periods = 20
     send_message(f"Fehler beim Laden der Strategie-Config: {e}\n{traceback.format_exc()}")
 
+quotes = get_quote_assets()
+
 while main_loop_active:
     transaction_id = str(uuid.uuid4())
 
@@ -125,9 +124,8 @@ while main_loop_active:
             last_symbol_update = current_time
             startup_sent = False
 
-        all_db_symbols = [row['symbol'] for row in data_fetcher.get_all_symbols(symbol_type=None)]
-        spot_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="spot")]
-        futures_symbols_all = [symbol_db_to_ccxt(row['symbol'], all_db_symbols) for row in data_fetcher.get_all_symbols(symbol_type="futures")]
+        spot_symbols_all = [symbol_db_to_ccxt(row['symbol'], quotes) for row in data_fetcher.get_all_symbols(symbol_type="spot")]
+        futures_symbols_all = [symbol_db_to_ccxt(row['symbol'], quotes) for row in data_fetcher.get_all_symbols(symbol_type="futures")]
 
         tickers = data_fetcher.fetch_binance_tickers()
         spot_symbols = sorted(
@@ -159,14 +157,16 @@ while main_loop_active:
             if trader.open_trade:
                 df = spot_ohlcv.get(symbol)
                 if df is not None:
-                    trader.monitor_trade(df, transaction_id, lambda price: spot_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn)
+                    status = trader.monitor_trade(df, transaction_id, lambda price: spot_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn)
+                    data_fetcher.save_log(LOG_DEBUG, 'main', 'monitor_trade', f"{symbol} Spot-Status: {status}", transaction_id)
 
         for symbol, trader in futures_traders.items():
             trader.load_open_trade(transaction_id)
             if trader.open_trade:
                 df = futures_ohlcv.get(symbol)
                 if df is not None:
-                    trader.monitor_trade(df, transaction_id, lambda price: futures_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn, trader.get_current_position_volume)
+                    status = trader.monitor_trade(df, transaction_id, lambda price: futures_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn, trader.get_current_position_volume)
+                    data_fetcher.save_log(LOG_DEBUG, 'main', 'monitor_trade', f"{symbol} Futures-Status: {status}", transaction_id)
 
         # ---- Nur Signale scannen, wenn kein Trade aktiv ----
         spot_has_open = any(t.open_trade for t in spot_traders.values())
