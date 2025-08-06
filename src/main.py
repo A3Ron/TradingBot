@@ -113,6 +113,8 @@ quotes = get_quote_assets()
 
 while main_loop_active:
     transaction_id = str(uuid.uuid4())
+    balance = data_fetcher.fetch_balances()
+    data_fetcher.save_log(LOG_DEBUG, 'main', 'loop', f"Balance: {balance}", transaction_id)
 
     try:
         current_time = time.time()

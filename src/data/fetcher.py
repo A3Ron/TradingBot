@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
+import os
 import traceback
 import uuid
 import ccxt
+from dotenv import load_dotenv
 import pandas as pd
 from sqlalchemy import text
 
@@ -10,12 +12,25 @@ from models.symbol import Symbol
 from telegram import send_message
 from data import get_session, save_log
 
+load_dotenv()
+
+api_key = os.getenv("BINANCE_API_KEY")
+api_secret = os.getenv("BINANCE_SECRET")
 
 class DataFetcher:
     def __init__(self):
         self._last_symbol_update = 0
-        self.spot_exchange = ccxt.binance({"enableRateLimit": True})
-        self.futures_exchange = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "future"}})
+        self.spot_exchange = ccxt.binance({
+            "apiKey": api_key,
+            "secret": api_secret,
+            "enableRateLimit": True
+        })
+        self.futures_exchange = ccxt.binance({
+            "apiKey": api_key,
+            "secret": api_secret,
+            "enableRateLimit": True,
+            "options": {"defaultType": "future"}
+        })
 
     def save_log(self, level, source, method, message, transaction_id):
         save_log(level, source, method, message, transaction_id)
