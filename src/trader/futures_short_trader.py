@@ -3,6 +3,7 @@ from trader.base_trader import BaseTrader
 from data.constants import FUTURES, SHORT, LOG_ERROR
 from telegram import send_message
 
+
 class FuturesShortTrader(BaseTrader):
     def __init__(self, config, symbol, data_fetcher=None, strategy_config=None):
         super().__init__(config, symbol, FUTURES, SHORT, data_fetcher, strategy_config)
@@ -51,11 +52,19 @@ class FuturesShortTrader(BaseTrader):
             send_message(error_msg, transaction_id=tx_id)
             raise
 
-    def _close_fn(self, volume, tx_id: str):
+    def _close_fn(self, _, tx_id: str):
         try:
-            contracts = self.round_volume(volume)
+            # 📦 Hole aktuelle Short-Position
+            contracts = self._get_current_position_volume(tx_id)
+            contracts = self.round_volume(contracts)
 
-            # ✅ Erstversuch: Normale MARKET BUY reduceOnly-Order
+            if contracts <= 0:
+                msg = f"Keine offene Short-Position für {self.symbol} – Volumen: {contracts}"
+                self._log(LOG_ERROR, '_close_fn', msg, tx_id)
+                send_message(f"[FEHLER] Futures Close: {msg}", transaction_id=tx_id)
+                raise ValueError(msg)
+
+            # ✅ Normale Reduce-Only-Close Order
             return self.exchange.create_order(
                 self.symbol,
                 type='MARKET',
@@ -69,7 +78,6 @@ class FuturesShortTrader(BaseTrader):
             send_message(f"[WARNUNG] Normale Close-Order fehlgeschlagen für {self.symbol}. Versuche Fallback…", transaction_id=tx_id)
 
             try:
-                # 🛡️ Fallback: Close-Position direkt
                 return self.exchange.create_order(
                     self.symbol,
                     type='MARKET',
