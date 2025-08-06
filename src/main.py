@@ -20,9 +20,9 @@ BLACKLIST = ['USDC/USDT', 'FDUSD/USDT', 'PAXG/USDT', 'WBTC/USDT', 'WBETH/USDT']
 TOP_N = 50
 MIN_VOLATILITY_PCT = 1.5
 MIN_VOLUME_USD = 50000000
-SYMBOL_UPDATE_INTERVAL = 43200  # 12 Stunden
+SYMBOL_UPDATE_INTERVAL = 10800  # 3 Stunden
 EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
-
+    
 last_symbol_update = 0
 main_loop_active = True
 force_symbol_update_on_start = True
