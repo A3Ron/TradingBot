@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal, getcontext
 import math
 import traceback
 from typing import Optional, Dict, Any, Callable
@@ -57,25 +58,27 @@ class BaseTrader:
     def round_volume(self, volume: float) -> float:
         try:
             market = self.exchange.market(self.symbol)
-            step = None
-            if 'info' in market and 'filters' in market['info']:
-                for f in market['info']['filters']:
-                    if f['filterType'] == 'MARKET_LOT_SIZE':
-                        step = float(f['stepSize'])
-                        break
-            if step:
-                rounded = math.floor(volume / step) * step
-                if rounded <= 0:
-                    self._log(LOG_WARNING, 'round_volume',
-                              f"Gerundetes Volumen ist 0 – Original: {volume}, Step: {step}", str(uuid.uuid4()))
-                return rounded
-            precision = market.get('precision', {}).get('amount')
-            if precision is not None:
-                return round(volume, int(precision))
-        except Exception as e:
-            self._log(LOG_WARNING, 'round_volume', str(e), str(uuid.uuid4()))
 
-        return round(volume, 6)
+            # Schrittgröße holen
+            step_size = None
+            for f in market.get("info", {}).get("filters", []):
+                if f.get("filterType") == "LOT_SIZE":
+                    step_size = Decimal(f["stepSize"])
+                    break
+
+            if step_size:
+                # Exakte Rundung auf gültige Schrittgröße
+                getcontext().prec = 20  # erhöhe Präzision für Decimal-Arithmetik
+                vol = Decimal(str(volume))
+                rounded = (vol // step_size) * step_size
+                return float(rounded)
+
+            # Fallback auf "precision"
+            precision = market.get("precision", {}).get("amount")
+            return round(volume, precision if precision is not None else 6)
+        except Exception as e:
+            self._log(LOG_WARNING, 'round_volume', f"Fehler beim Runden: {e}", str(uuid.uuid4()))
+            return round(volume, 6)
 
     def calculate_stake_quote_amount(self) -> float:
         balance = self.exchange.fetch_balance()

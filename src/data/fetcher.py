@@ -15,7 +15,7 @@ from data import get_session, save_log
 load_dotenv()
 
 api_key = os.getenv("BINANCE_API_KEY")
-api_secret = os.getenv("BINANCE_SECRET")
+api_secret = os.getenv("BINANCE_API_SECRET")
 
 class DataFetcher:
     def __init__(self):
@@ -119,6 +119,54 @@ class DataFetcher:
             self.save_log("ERROR", "fetcher", "fetch_balances", msg, tx_id)
             send_message(f"[FEHLER] fetch_balances: {msg}", tx_id)
             return {}
+
+    def fetch_balances_full_report(self, market_type: str = "spot", tx_id: str = None, as_text: bool = True):
+        """
+        Liefert alle Balances für das angegebene Market Type (spot oder futures),
+        mit free, used und total pro Asset. Optional als Telegram-Text.
+
+        :param market_type: "spot" oder "futures"
+        :param tx_id: Transaktions-ID (optional)
+        :param as_text: Ob der Rückgabewert als formatierten String (für Telegram) oder dict zurückgegeben werden soll
+        :return: str oder dict
+        """
+        tx_id = tx_id or str(uuid.uuid4())
+        exchange = self.spot_exchange if market_type == "spot" else self.futures_exchange
+
+        try:
+            balance_data = exchange.fetch_balance()
+            free = balance_data.get("free", {})
+            used = balance_data.get("used", {})
+            total = balance_data.get("total", {})
+
+            # Filter nur Assets mit > 0 Balance
+            all_assets = sorted({*free, *used, *total})
+            nonzero_assets = [asset for asset in all_assets if total.get(asset, 0) > 0]
+
+            report = {}
+            for asset in nonzero_assets:
+                report[asset] = {
+                    "free": free.get(asset, 0.0),
+                    "used": used.get(asset, 0.0),
+                    "total": total.get(asset, 0.0)
+                }
+
+            if as_text:
+                lines = [f"📊 {market_type.capitalize()} Balances:"]
+                for asset, b in report.items():
+                    lines.append(f"{asset}: free={b['free']:.4f}, used={b['used']:.4f}, total={b['total']:.4f}")
+                return "\n".join(lines)
+
+            send_message(report)
+
+            return report
+
+        except Exception as e:
+            msg = f"Fehler beim Abrufen der {market_type}-Balances (Vollbericht): {e}"
+            self.save_log("ERROR", "fetcher", "fetch_balances_full_report", msg, tx_id)
+            send_message(f"[FEHLER] fetch_balances_full_report: {msg}", tx_id)
+            return "" if as_text else {}
+
 
     def update_symbols_from_binance(self):
         transaction_id = str(uuid.uuid4())
