@@ -71,7 +71,7 @@ def close_trade(
             profit = 0.0
 
         trade.status = 'closed'
-        trade.profit_realized = profit
+        trade.profit_realized = float(profit)
         trade.exit_reason = exit_reason
         trade.fee_paid = fee_paid
         trade.raw_order_data = raw_order_data
