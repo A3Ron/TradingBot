@@ -1,3 +1,5 @@
+# main.py – Refactored Main Loop mit persistenter Trade-Überwachung
+
 import os
 import uuid
 import yaml
@@ -14,17 +16,14 @@ from trader.spot_long_trader import SpotLongTrader
 from trader.futures_short_trader import FuturesShortTrader
 from strategy.strategy_loader import get_strategy
 
-# --- Konstanten ---
 CONFIG_PATH = '../config.yaml'
 STRATEGY_PATH = 'strategy/strategy_high_volatility_breakout_momentum.yaml'
-MAIN = "main"
-MAIN_LOOP = "main_loop"
 BLACKLIST = ['USDC/USDT', 'FDUSD/USDT', 'PAXG/USDT', 'WBTC/USDT', 'WBETH/USDT']
 TOP_N = 50
 MIN_VOLATILITY_PCT = 1.5
 MIN_VOLUME_USD = 50000000
-EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
 SYMBOL_UPDATE_INTERVAL = 43200  # 12 Stunden
+EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
 
 last_symbol_update = 0
 main_loop_active = True
@@ -148,36 +147,48 @@ while main_loop_active:
         spot_strategy = strategies['spot_long']
         futures_strategy = strategies['futures_short']
 
-        spot_traders = {
-            symbol: SpotLongTrader(config, symbol, data_fetcher, strategy_cfg)
-            for symbol in spot_symbols
-        }
-        futures_traders = {
-            symbol: FuturesShortTrader(config, symbol, data_fetcher, strategy_cfg)
-            for symbol in futures_symbols
-        }
+        spot_traders = {symbol: SpotLongTrader(config, symbol, data_fetcher, strategy_cfg) for symbol in spot_symbols}
+        futures_traders = {symbol: FuturesShortTrader(config, symbol, data_fetcher, strategy_cfg) for symbol in futures_symbols}
 
         spot_ohlcv = data_fetcher.fetch_ohlcv(spot_symbols, 'spot', timeframe, transaction_id, price_change_periods + 15)
         futures_ohlcv = data_fetcher.fetch_ohlcv(futures_symbols, 'futures', timeframe, transaction_id, price_change_periods + 15)
 
-        best_spot = spot_strategy.select_best_signal(spot_ohlcv)
-        best_futures = futures_strategy.select_best_signal(futures_ohlcv)
+        # ---- Neuer Schritt: Monitoring aktiver Trades ----
+        for symbol, trader in spot_traders.items():
+            trader.load_open_trade(transaction_id)
+            if trader.open_trade:
+                df = spot_ohlcv.get(symbol)
+                if df is not None:
+                    trader.monitor_trade(df, transaction_id, lambda price: spot_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn)
 
-        if best_spot:
-            symbol, df = best_spot
-            if symbol in spot_traders:
+        for symbol, trader in futures_traders.items():
+            trader.load_open_trade(transaction_id)
+            if trader.open_trade:
+                df = futures_ohlcv.get(symbol)
+                if df is not None:
+                    trader.monitor_trade(df, transaction_id, lambda price: futures_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn, trader.get_current_position_volume)
+
+        # ---- Nur Signale scannen, wenn kein Trade aktiv ----
+        spot_has_open = any(t.open_trade for t in spot_traders.values())
+        futures_has_open = any(t.open_trade for t in futures_traders.values())
+
+        if not spot_has_open:
+            best_spot = spot_strategy.select_best_signal(spot_ohlcv)
+            if best_spot:
+                symbol, df = best_spot
                 spot_traders[symbol].handle_trades(spot_strategy, {symbol: df}, transaction_id)
 
-        if best_futures:
-            symbol, df = best_futures
-            if symbol in futures_traders:
+        if not futures_has_open:
+            best_futures = futures_strategy.select_best_signal(futures_ohlcv)
+            if best_futures:
+                symbol, df = best_futures
                 futures_traders[symbol].handle_trades(futures_strategy, {symbol: df}, transaction_id)
 
-        data_fetcher.save_log(LOG_DEBUG, MAIN, MAIN_LOOP, 'Loop abgeschlossen', transaction_id)
+        data_fetcher.save_log(LOG_DEBUG, 'main', 'loop', 'Loop abgeschlossen', transaction_id)
 
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[MAIN LOOP ERROR] {e}\n{tb}")
-        data_fetcher.save_log(LOG_ERROR, MAIN, MAIN_LOOP, f"Fehler: {e}\n{tb}", transaction_id)
+        data_fetcher.save_log(LOG_ERROR, 'main', 'loop', f"Fehler: {e}\n{tb}", transaction_id)
         send_message(f"Fehler im Hauptloop: {e}\n{tb}", transaction_id)
         main_loop_active = False
