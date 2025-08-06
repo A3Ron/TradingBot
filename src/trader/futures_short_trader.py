@@ -54,6 +54,8 @@ class FuturesShortTrader(BaseTrader):
     def _close_fn(self, volume, tx_id: str):
         try:
             contracts = self.round_volume(volume)
+
+            # ✅ Erstversuch: Normale MARKET BUY reduceOnly-Order
             return self.exchange.create_order(
                 self.symbol,
                 type='MARKET',
@@ -61,10 +63,13 @@ class FuturesShortTrader(BaseTrader):
                 amount=contracts,
                 params={'reduceOnly': True}
             )
+
         except Exception as e1:
             self._log(LOG_ERROR, '_close_fn', f"Fehler beim normalen Close: {e1}", tx_id)
             send_message(f"[WARNUNG] Normale Close-Order fehlgeschlagen für {self.symbol}. Versuche Fallback…", transaction_id=tx_id)
+
             try:
+                # 🛡️ Fallback: Close-Position direkt
                 return self.exchange.create_order(
                     self.symbol,
                     type='MARKET',

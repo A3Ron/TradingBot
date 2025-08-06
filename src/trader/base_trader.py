@@ -15,6 +15,7 @@ from data.constants import LOG_INFO, LOG_WARNING, LOG_ERROR, SPOT
 
 EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
 
+
 class BaseTrader:
     def __init__(self, config: dict, symbol: str, market_type: str, side: str,
                  data_fetcher: Optional[DataFetcher] = None,
@@ -25,7 +26,7 @@ class BaseTrader:
         self.side = side
         self.data = data_fetcher or DataFetcher()
         self.strategy_config = strategy_config or {}
-        self.open_trade = None  # Typ: Optional[Trade]
+        self.open_trade = None
         self.mode = config['execution']['mode']
         self.exchange = None
 
@@ -45,10 +46,7 @@ class BaseTrader:
                 'options': {'defaultType': default_type}
             })
 
-            # ✅ Märkte laden, bevor auf symbol zugegriffen wird
             self.exchange.load_markets()
-
-            # Hole step size für symbol
             market = self.exchange.market(self.symbol)
             self.lot_step = float(market['limits']['amount']['min'])
 
@@ -59,27 +57,21 @@ class BaseTrader:
     def round_volume(self, volume: float) -> float:
         try:
             market = self.exchange.market(self.symbol)
-
-            # 1. Step-Größe aus 'MARKET_LOT_SIZE' herausfinden
             step = None
             if 'info' in market and 'filters' in market['info']:
                 for f in market['info']['filters']:
                     if f['filterType'] == 'MARKET_LOT_SIZE':
                         step = float(f['stepSize'])
                         break
-
-            # 2. Wenn Step vorhanden: sauber runden
             if step:
                 rounded = math.floor(volume / step) * step
                 if rounded <= 0:
-                    self._log(LOG_WARNING, 'round_volume', f"Gerundetes Volumen ist 0 – Original: {volume}, Step: {step}", str(uuid.uuid4()))
+                    self._log(LOG_WARNING, 'round_volume',
+                              f"Gerundetes Volumen ist 0 – Original: {volume}, Step: {step}", str(uuid.uuid4()))
                 return rounded
-
-            # 3. Fallback: Präzision
             precision = market.get('precision', {}).get('amount')
             if precision is not None:
                 return round(volume, int(precision))
-
         except Exception as e:
             self._log(LOG_WARNING, 'round_volume', str(e), str(uuid.uuid4()))
 
@@ -120,18 +112,21 @@ class BaseTrader:
             valid = False
 
         if valid and not (signal.entry > signal.stop_loss and signal.take_profit > signal.entry):
-            self._log(LOG_WARNING, 'validate_signal', f"Signal-Level inkonsistent: Entry {signal.entry}, SL {signal.stop_loss}, TP {signal.take_profit}", tx_id)
+            self._log(LOG_WARNING, 'validate_signal',
+                      f"Signal-Level inkonsistent: Entry {signal.entry}, SL {signal.stop_loss}, TP {signal.take_profit}",
+                      tx_id)
             valid = False
 
         return valid
 
+    def is_valid_volume(self, volume: float, min_threshold: float = 0.00001) -> bool:
+        return volume is not None and volume >= min_threshold
+
     def load_open_trade(self, tx_id: str):
         trade = self.data.get_last_open_trade(self.symbol, self.side, self.market_type)
-        if trade:
-            self.open_trade = trade
-        else:
+        self.open_trade = trade
+        if not trade:
             self._log(LOG_INFO, 'load_open_trade', f"Kein offener Trade für {self.symbol}", tx_id)
-            self.open_trade = None
 
     def execute_trade(self, signal, tx_id: str, entry_fn: Callable[[float, str], Any]) -> Optional[Dict[str, Any]]:
         volume = self.round_volume(signal.volume)
@@ -176,25 +171,28 @@ class BaseTrader:
                     amt = pos.get('contracts') or pos.get('positionAmt')
                     if amt and float(amt) < 0:
                         return abs(float(amt))
-            self._log(LOG_WARNING, 'fetch_short_position_volume', f"Keine offene Short-Position für {self.symbol}.", tx_id)
+            self._log(LOG_WARNING, 'fetch_short_position_volume',
+                      f"Keine offene Short-Position für {self.symbol}.", tx_id)
         except Exception as e:
             self._log(LOG_ERROR, 'fetch_short_position_volume', f"Fehler beim Laden der Positionen: {e}", tx_id)
         return 0.0
 
     def monitor_trade(self, df, tx_id: str, exit_condition: Callable[[float], bool],
-                      close_fn: Callable[[float, str], Any], fetch_position_fn: Optional[Callable[[str], float]] = None) -> Optional[str]:
+                      close_fn: Callable[[float, str], Any],
+                      fetch_position_fn: Optional[Callable[[str], float]] = None) -> Optional[str]:
         if not self.open_trade:
             return None
 
         current_price = df['close'].iloc[-1]
         now = datetime.now(timezone.utc)
         trade_time = self.open_trade.timestamp
-
         cooldown_active = trade_time and (now - trade_time).total_seconds() < EXIT_COOLDOWN_SECONDS
 
         if exit_condition(current_price):
-            is_stop_loss_hit = (current_price <= self.open_trade.stop_loss_price) if self.side == 'long' else (current_price >= self.open_trade.stop_loss_price)
-            is_take_profit_hit = (current_price >= self.open_trade.take_profit_price) if self.side == 'long' else (current_price <= self.open_trade.take_profit_price)
+            is_stop_loss_hit = (current_price <= self.open_trade.stop_loss_price) if self.side == 'long' else (
+                        current_price >= self.open_trade.stop_loss_price)
+            is_take_profit_hit = (current_price >= self.open_trade.take_profit_price) if self.side == 'long' else (
+                        current_price <= self.open_trade.take_profit_price)
 
             if cooldown_active and not (is_stop_loss_hit or is_take_profit_hit):
                 self._log(LOG_INFO, 'monitor_trade', f"Ausstieg blockiert durch Cooldown ({self.symbol})", tx_id)
@@ -202,6 +200,12 @@ class BaseTrader:
 
             volume = fetch_position_fn(tx_id) if fetch_position_fn else self.open_trade.trade_volume
             volume = self.round_volume(volume)
+
+            if not self.is_valid_volume(volume):
+                self._log(LOG_ERROR, 'monitor_trade',
+                          f"Abbruch Close: Ungültiges oder zu kleines Volumen für {self.symbol} ({volume})", tx_id)
+                send_message(f"[FEHLER] Close-Order abgebrochen – Volumen ungültig ({self.symbol})")
+                return None
 
             try:
                 close_fn(volume, tx_id)
@@ -239,7 +243,8 @@ class BaseTrader:
                 if signal and self.validate_signal(signal, transaction_id):
                     self.execute_trade(signal, transaction_id, self.entry_fn)
                 else:
-                    self._log(LOG_WARNING, 'handle_trades', f"Ungültiges Signal für {self.symbol}: {signal}", transaction_id)
+                    self._log(LOG_WARNING, 'handle_trades',
+                              f"Ungültiges Signal für {self.symbol}: {signal}", transaction_id)
         except Exception as e:
             tb = traceback.format_exc()
             self._log(LOG_ERROR, 'handle_trades', f"Fehler in handle_trades: {e}\n{tb}", transaction_id)
