@@ -14,6 +14,8 @@ from data import get_session, save_log
 class DataFetcher:
     def __init__(self):
         self._last_symbol_update = 0
+        self.spot_exchange = ccxt.binance({"enableRateLimit": True})
+        self.futures_exchange = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "future"}})
 
     def save_log(self, level, source, method, message, transaction_id):
         save_log(level, source, method, message, transaction_id)
@@ -52,7 +54,6 @@ class DataFetcher:
 
         return ohlcv_map
 
-
     def fetch_ohlcv_single(self, symbol, market_type, timeframe, transaction_id, limit):
         exchange = ccxt.binance({
             "enableRateLimit": True,
@@ -82,19 +83,35 @@ class DataFetcher:
             send_message(msg, transaction_id)
             return {}
 
+    def fetch_balances(self, assets: list[str] = None, market_type: str = "spot", tx_id: str = None):
+        tx_id = tx_id or str(uuid.uuid4())
+        exchange = self.spot_exchange if market_type == "spot" else self.futures_exchange
+
+        try:
+            balances = exchange.fetch_balance().get("free", {})
+            if not balances:
+                raise ValueError("Keine Balances gefunden")
+
+            if assets:
+                result = {asset: balances.get(asset, 0.0) for asset in assets}
+            else:
+                result = dict(balances)
+
+            self.save_log("DEBUG", "fetcher", "fetch_balances", f"Balances ({market_type}): {result}", tx_id)
+            return result
+        except Exception as e:
+            msg = f"Fehler beim Abrufen der {market_type}-Balances: {e}"
+            self.save_log("ERROR", "fetcher", "fetch_balances", msg, tx_id)
+            send_message(f"[FEHLER] fetch_balances: {msg}", tx_id)
+            return {}
+
     def update_symbols_from_binance(self):
         transaction_id = str(uuid.uuid4())
         self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", "Start", transaction_id)
 
         try:
-            spot_exchange = ccxt.binance({"enableRateLimit": True})
-            futures_exchange = ccxt.binance({
-                "enableRateLimit": True,
-                "options": {"defaultType": "future"}
-            })
-
-            spot_markets = spot_exchange.load_markets()
-            futures_markets = futures_exchange.load_markets()
+            spot_markets = self.spot_exchange.load_markets()
+            futures_markets = self.futures_exchange.load_markets()
 
             self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", f"Spot markets loaded: {len(spot_markets)}", transaction_id)
             self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", f"Futures markets loaded: {len(futures_markets)}", transaction_id)
@@ -130,7 +147,6 @@ class DataFetcher:
                         updated_at=now
                     )
 
-                # Spot
                 for market in spot_markets.values():
                     if market.get("active") and market.get("quote") == "USDT":
                         try:
@@ -143,7 +159,6 @@ class DataFetcher:
                             self.save_log("ERROR", "fetcher", "update_symbols_from_binance", msg, transaction_id)
                             send_message(f"❌ {msg}", transaction_id)
 
-                # Futures
                 for market in futures_markets.values():
                     if (
                         market.get("active") and
@@ -174,7 +189,6 @@ class DataFetcher:
             send_message(msg, transaction_id)
             return None
 
-
     def get_last_open_trade(self, symbol: str, side: str, market_type: str):
         with get_session() as session:
             return session.query(Trade).filter_by(
@@ -183,7 +197,7 @@ class DataFetcher:
                 market_type=market_type,
                 status="open"
             ).order_by(Trade.timestamp.desc()).first()
-        
+
     def get_symbol_id(self, symbol_name: str):
         with get_session() as session:
             symbol = session.query(Symbol).filter_by(symbol=symbol_name).first()
