@@ -14,9 +14,7 @@ class FuturesShortTrader(BaseTrader):
         self.close_fn = self._close_fn
         self.get_current_position_volume = self._get_current_position_volume
 
-        # Lokale transaction_id für das Initialisierungs-Logging
         tx_id = str(uuid.uuid4())
-
         try:
             self.exchange.set_margin_mode('isolated', symbol=self.symbol)
             self.exchange.set_leverage(5, symbol=self.symbol)
@@ -56,7 +54,6 @@ class FuturesShortTrader(BaseTrader):
     def _close_fn(self, volume, tx_id: str):
         try:
             contracts = self.round_volume(volume)
-
             return self.exchange.create_order(
                 self.symbol,
                 type='MARKET',
@@ -66,11 +63,7 @@ class FuturesShortTrader(BaseTrader):
             )
         except Exception as e1:
             self._log(LOG_ERROR, '_close_fn', f"Fehler beim normalen Close: {e1}", tx_id)
-            send_message(
-                f"[WARNUNG] Normale Close-Order fehlgeschlagen für {self.symbol}. Versuche Fallback…",
-                transaction_id=tx_id
-            )
-
+            send_message(f"[WARNUNG] Normale Close-Order fehlgeschlagen für {self.symbol}. Versuche Fallback…", transaction_id=tx_id)
             try:
                 return self.exchange.create_order(
                     self.symbol,

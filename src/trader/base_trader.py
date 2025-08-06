@@ -45,6 +45,9 @@ class BaseTrader:
                 'options': {'defaultType': default_type}
             })
 
+            # ✅ Märkte laden, bevor auf symbol zugegriffen wird
+            self.exchange.load_markets()
+
             # Hole step size für symbol
             market = self.exchange.market(self.symbol)
             self.lot_step = float(market['limits']['amount']['min'])

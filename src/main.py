@@ -1,5 +1,3 @@
-# main.py – Refactored Main Loop mit persistenter Trade-Überwachung
-
 import os
 import uuid
 import yaml
@@ -151,7 +149,6 @@ while main_loop_active:
         spot_ohlcv = data_fetcher.fetch_ohlcv(spot_symbols, 'spot', timeframe, transaction_id, price_change_periods + 15)
         futures_ohlcv = data_fetcher.fetch_ohlcv(futures_symbols, 'futures', timeframe, transaction_id, price_change_periods + 15)
 
-        # ---- Neuer Schritt: Monitoring aktiver Trades ----
         for symbol, trader in spot_traders.items():
             trader.load_open_trade(transaction_id)
             if trader.open_trade:
@@ -168,7 +165,6 @@ while main_loop_active:
                     status = trader.monitor_trade(df, transaction_id, lambda price: futures_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn, trader.get_current_position_volume)
                     data_fetcher.save_log(LOG_DEBUG, 'main', 'monitor_trade', f"{symbol} Futures-Status: {status}", transaction_id)
 
-        # ---- Nur Signale scannen, wenn kein Trade aktiv ----
         spot_has_open = any(t.open_trade for t in spot_traders.values())
         futures_has_open = any(t.open_trade for t in futures_traders.values())
 

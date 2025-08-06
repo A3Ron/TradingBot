@@ -1,5 +1,3 @@
-import os
-import ccxt
 from trader.base_trader import BaseTrader
 from data.constants import SPOT, LONG, LOG_ERROR
 from telegram import send_message
