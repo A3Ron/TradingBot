@@ -1,7 +1,7 @@
 import pandas as pd
 import traceback
 from .base_strategy import BaseStrategy
-from data.constants import FUTURES, LOG_ERROR, LOG_DEBUG, LOG_INFO, SHORT
+from data.constants import FUTURES, LOG_ERROR, LOG_DEBUG, SHORT
 from telegram import send_message
 
 
@@ -56,8 +56,7 @@ class FuturesShortStrategy(BaseStrategy):
                     f"SL: {(last[self.COL_CLOSE] * (1 + self.stop_loss_pct)):.4f} | "
                     f"TP: {(last[self.COL_CLOSE] * (1 - self.take_profit_pct)):.4f}"
                 )
-                self.data.save_log(LOG_INFO, self.__class__.__name__, 'evaluate_signals', msg, transaction_id)
-                send_message(msg, transaction_id)
+                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals', msg, transaction_id)
             else:
                 last = df.iloc[-1]
                 msg = (

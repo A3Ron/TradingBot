@@ -58,7 +58,6 @@ class SpotLongStrategy(BaseStrategy):
                     f"TP: {(last[self.COL_CLOSE] * (1 + self.take_profit_pct)):.4f}"
                 )
                 self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals', msg, transaction_id)
-                send_message(msg, transaction_id)
             else:
                 last = df.iloc[-1]
                 msg = (
