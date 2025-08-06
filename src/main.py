@@ -17,9 +17,9 @@ from strategy.strategy_loader import get_strategy
 CONFIG_PATH = '../config.yaml'
 STRATEGY_PATH = 'strategy/strategy_high_volatility_breakout_momentum.yaml'
 BLACKLIST = ['USDC/USDT', 'FDUSD/USDT', 'PAXG/USDT', 'WBTC/USDT', 'WBETH/USDT']
-TOP_N = 50
+TOP_N = 75
 MIN_VOLATILITY_PCT = 1.5
-MIN_VOLUME_USD = 50000000
+MIN_VOLUME_USD = 10_000_000
 SYMBOL_UPDATE_INTERVAL = 10800  # 3 Stunden
 EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
     
