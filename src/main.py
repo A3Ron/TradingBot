@@ -22,7 +22,7 @@ MIN_VOLATILITY_PCT = 1.5
 MIN_VOLUME_USD = 10_000_000
 SYMBOL_UPDATE_INTERVAL = 10800  # 3 Stunden
 EXIT_COOLDOWN_SECONDS = 300  # 5 Minuten
-    
+
 last_symbol_update = 0
 main_loop_active = True
 force_symbol_update_on_start = True
@@ -113,7 +113,7 @@ quotes = get_quote_assets()
 
 while main_loop_active:
     transaction_id = str(uuid.uuid4())
-    # balance = data_fetcher.fetch_balances_full_report()
+    loop_blacklist = set()
 
     try:
         current_time = time.time()
@@ -155,16 +155,29 @@ while main_loop_active:
             if trader.open_trade:
                 df = spot_ohlcv.get(symbol)
                 if df is not None:
-                    status = trader.monitor_trade(df, transaction_id, lambda price: spot_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn)
-                    data_fetcher.save_log(LOG_DEBUG, 'main', 'monitor_trade', f"{symbol} Spot-Status: {status}", transaction_id)
+                    status = trader.monitor_trade(
+                        df, transaction_id,
+                        lambda price: spot_strategy.should_exit_trade(trader.open_trade, price, symbol),
+                        trader.close_fn
+                    )
+                    if not trader.open_trade:
+                        loop_blacklist.add(symbol)
+                        data_fetcher.save_log(LOG_DEBUG, 'main', 'blacklist', f"{symbol} zur Blacklist hinzugefügt", transaction_id)
 
         for symbol, trader in futures_traders.items():
             trader.load_open_trade(transaction_id)
             if trader.open_trade:
                 df = futures_ohlcv.get(symbol)
                 if df is not None:
-                    status = trader.monitor_trade(df, transaction_id, lambda price: futures_strategy.should_exit_trade(trader.open_trade, price, symbol), trader.close_fn, trader.get_current_position_volume)
-                    data_fetcher.save_log(LOG_DEBUG, 'main', 'monitor_trade', f"{symbol} Futures-Status: {status}", transaction_id)
+                    status = trader.monitor_trade(
+                        df, transaction_id,
+                        lambda price: futures_strategy.should_exit_trade(trader.open_trade, price, symbol),
+                        trader.close_fn,
+                        trader.get_current_position_volume
+                    )
+                    if not trader.open_trade:
+                        loop_blacklist.add(symbol)
+                        data_fetcher.save_log(LOG_DEBUG, 'main', 'blacklist', f"{symbol} zur Blacklist hinzugefügt", transaction_id)
 
         spot_has_open = any(t.open_trade for t in spot_traders.values())
         futures_has_open = any(t.open_trade for t in futures_traders.values())
@@ -173,13 +186,19 @@ while main_loop_active:
             best_spot = spot_strategy.select_best_signal(spot_ohlcv)
             if best_spot:
                 symbol, df = best_spot
-                spot_traders[symbol].handle_trades(spot_strategy, {symbol: df}, transaction_id)
+                if symbol in loop_blacklist:
+                    data_fetcher.save_log(LOG_DEBUG, 'main', 'blacklist', f"{symbol} auf Blacklist \u2013 Trade ausgelassen", transaction_id)
+                else:
+                    spot_traders[symbol].handle_trades(spot_strategy, {symbol: df}, transaction_id)
 
         if not futures_has_open:
             best_futures = futures_strategy.select_best_signal(futures_ohlcv)
             if best_futures:
                 symbol, df = best_futures
-                futures_traders[symbol].handle_trades(futures_strategy, {symbol: df}, transaction_id)
+                if symbol in loop_blacklist:
+                    data_fetcher.save_log(LOG_DEBUG, 'main', 'blacklist', f"{symbol} auf Blacklist \u2013 Trade ausgelassen", transaction_id)
+                else:
+                    futures_traders[symbol].handle_trades(futures_strategy, {symbol: df}, transaction_id)
 
         data_fetcher.save_log(LOG_DEBUG, 'main', 'loop', 'Loop abgeschlossen', transaction_id)
 
