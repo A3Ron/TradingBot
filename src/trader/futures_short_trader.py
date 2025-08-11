@@ -16,39 +16,81 @@ class FuturesShortTrader(BaseTrader):
         self.close_fn = self._close_fn                # (volume, tx_id)
         self.get_current_position_volume = self._get_current_position_volume  # (tx_id) -> float
 
-        tx_id = str(uuid.uuid4())
-        self._ensure_oneway_isolated_leverage(tx_id)
+        # Setup-Cache: verhindert wiederholte globale/je-Symbol Calls
+        self._setup_cache = {
+            # 'posmode': 'oneway'|'hedged'
+            # f"margin:{symbol}": 'ISOLATED'|'CROSSED'
+            # f"lev:{symbol}": int
+        }
 
-    # --- One-way, Isolated, Leverage sicherstellen ---
+        # WICHTIG: kein Zwangs-Setup im __init__ (vermeidet Spam für jedes Symbol)
+        # Nur bei Entry sicherstellen.
+
+    # -------- Helpers --------
+    @staticmethod
+    def _is_no_change_error(err: Exception) -> bool:
+        s = str(err).lower()
+        # deckt typische Binance/ccxt-Meldungen ab
+        return any(
+            key in s for key in (
+                "no need to change",
+                "already",
+                "no change",
+                "same leverage",
+            )
+        )
+
     def _ensure_oneway_isolated_leverage(self, tx_id: str, leverage: int = None):
+        """
+        Stellt oneway + isolated + gewünschtes Leverage sicher.
+        Führt nur Änderungen aus, wenn nötig und cached Ergebnisse.
+        """
         lev = leverage
         if lev is None:
             lev = int(self.strategy_config.get("leverage", self.config.get("trading", {}).get("futures_leverage", 5)))
 
-        # One-way Mode (kein Hedge)
-        try:
-            self.exchange.set_position_mode(False)
-            self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', "PositionMode=one-way gesetzt", tx_id)
-        except Exception as e:
-            self._log(LOG_ERROR, '_ensure_oneway_isolated_leverage', f"PositionMode Fehler: {e}", tx_id)
+        # --- PositionMode (global) nur einmal setzen ---
+        if self._setup_cache.get('posmode') != 'oneway':
+            try:
+                # False = one-way (kein Hedge)
+                self.exchange.set_position_mode(False)
+                self._setup_cache['posmode'] = 'oneway'
+                self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', "PositionMode -> one-way", tx_id)
+            except Exception as e:
+                if self._is_no_change_error(e):
+                    self._setup_cache['posmode'] = 'oneway'
+                    self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', "PositionMode bereits one-way", tx_id)
+                else:
+                    # kein ERROR-Spam, aber sichtbar halten:
+                    self._log(LOG_ERROR, '_ensure_oneway_isolated_leverage', f"PositionMode Fehler: {e}", tx_id)
 
-        # Isolated Margin
-        try:
-            self.exchange.set_margin_mode('ISOLATED', symbol=self.symbol)
-            self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', f"ISOLATED für {self.symbol} gesetzt", tx_id)
-        except Exception as e:
-            emsg = str(e).lower()
-            if "no need to change" in emsg or "already" in emsg or "no change" in emsg:
-                self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', f"ISOLATED bereits aktiv für {self.symbol}", tx_id)
-            else:
-                self._log(LOG_ERROR, '_ensure_oneway_isolated_leverage', f"MarginMode Fehler: {e}", tx_id)
+        # --- Margin Mode (je Symbol) nur setzen, wenn nötig ---
+        margin_key = f"margin:{self.symbol}"
+        if self._setup_cache.get(margin_key) != 'ISOLATED':
+            try:
+                self.exchange.set_margin_mode('ISOLATED', symbol=self.symbol)
+                self._setup_cache[margin_key] = 'ISOLATED'
+                self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', f"{self.symbol}: Margin -> ISOLATED", tx_id)
+            except Exception as e:
+                if self._is_no_change_error(e):
+                    self._setup_cache[margin_key] = 'ISOLATED'
+                    self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', f"{self.symbol}: Margin bereits ISOLATED", tx_id)
+                else:
+                    self._log(LOG_ERROR, '_ensure_oneway_isolated_leverage', f"MarginMode Fehler ({self.symbol}): {e}", tx_id)
 
-        # Leverage
-        try:
-            self.exchange.set_leverage(lev, symbol=self.symbol)
-            self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', f"Leverage={lev} für {self.symbol} gesetzt", tx_id)
-        except Exception as e:
-            self._log(LOG_ERROR, '_ensure_oneway_isolated_leverage', f"Leverage Fehler: {e}", tx_id)
+        # --- Leverage (je Symbol) nur setzen, wenn nötig ---
+        lev_key = f"lev:{self.symbol}"
+        if self._setup_cache.get(lev_key) != lev:
+            try:
+                self.exchange.set_leverage(lev, symbol=self.symbol)
+                self._setup_cache[lev_key] = lev
+                self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', f"{self.symbol}: Leverage -> {lev}x", tx_id)
+            except Exception as e:
+                if self._is_no_change_error(e):
+                    self._setup_cache[lev_key] = lev
+                    self._log(LOG_DEBUG, '_ensure_oneway_isolated_leverage', f"{self.symbol}: Leverage bereits {lev}x", tx_id)
+                else:
+                    self._log(LOG_ERROR, '_ensure_oneway_isolated_leverage', f"Leverage Fehler ({self.symbol}): {e}", tx_id)
 
     # --- Entry / Close (Signaturen kompatibel zu BaseTrader.execute_trade) ---
     def _entry_fn(self, volume: float, tx_id: str):
