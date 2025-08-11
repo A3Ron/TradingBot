@@ -1,89 +1,89 @@
 import pandas as pd
+import numpy as np
 import traceback
-from .base_strategy import BaseStrategy
-from data.constants import LOG_ERROR, LOG_DEBUG, LONG, SPOT
+
+from strategy.base_strategy import BaseStrategy
+from data.constants import LOG_DEBUG, LOG_ERROR
 from telegram import send_message
 
 
 class SpotLongStrategy(BaseStrategy):
-    def __init__(self, strategy_cfg: dict, transaction_id: str, timeframe: str = '1m'):
-        super().__init__(strategy_cfg, transaction_id, timeframe=timeframe, market_type=SPOT, side=LONG)
+    """
+    Long-Breakout nur bei trendigem Regime:
+    - Regime-Filter: ADX/ATR%/BB-Bandbreite/CHOP
+    - Donchian-Breakout (Close > HH + Buffer)
+    - Relatives Volumen (Volume-Score)
+    - RSI >= rsi_long
+    Scoring: Volume-Score (je höher, desto besser)
+    """
 
-    def evaluate_signals(self, df: pd.DataFrame, transaction_id: str) -> pd.DataFrame:
+    def evaluate_signals(self, df: pd.DataFrame, transaction_id: str, symbol_override: str = None) -> pd.DataFrame:
+        out = df.copy()
+
         try:
-            df = df.copy()
-            if self.COL_TIMESTAMP not in df.columns:
-                raise ValueError("Timestamp column is missing in input DataFrame.")
+            # Basismetriken
+            out[self.COL_PRICE_CHANGE] = out[self.COL_CLOSE].pct_change(self.price_change_periods)
+            out[self.COL_VOL_MEAN] = out[self.COL_VOLUME].rolling(20, min_periods=5).median()
+            out[self.COL_VOLUME_SCORE] = (out[self.COL_VOLUME] / (out[self.COL_VOL_MEAN] + 1e-9)).clip(lower=0)
+            out = self.ensure_rsi_column(out)
 
-            # Symbol für Logging verfügbar machen
-            symbol = df['symbol'].iloc[0] if 'symbol' in df.columns else 'Unbekannt'
+            # Donchian
+            hh, ll = self._donchian(out, n=self.don_len)
+            out['don_high'] = hh
+            out['don_low'] = ll
 
-            # Preisänderung & RSI vorbereiten
-            df[self.COL_PRICE_CHANGE] = df[self.COL_CLOSE].pct_change(periods=self.price_change_periods)
-            df = self.ensure_rsi_column(df)
+            # letzte Kerze
+            last = out.index[-1]
+            price = float(out.loc[last, self.COL_CLOSE])
 
-            # Rolling Average Volume
-            rolling_vol = df[self.COL_VOLUME].rolling(window=self.price_change_periods, min_periods=1).mean().shift(1)
+            # Regime-Filter
+            env_ok, metrics = self.is_trending_env(out)
+            # MTF optional
+            mtf_ok = self.mtf_ok(symbol_override or "", want_trend='up')
 
-            # Signalbedingungen
-            signal_conditions = (
-                (df[self.COL_PRICE_CHANGE] > self.price_change_pct),
-                (df[self.COL_VOLUME] > rolling_vol * self.volume_mult),
-                (df[self.COL_RSI] > self.rsi_long)
-            )
+            # Breakout-Checks
+            buffer = self.breakout_buffer_pct / 100.0
+            don_ok = False
+            if not np.isnan(out.loc[last, 'don_high']):
+                don_ok = price > float(out.loc[last, 'don_high']) * (1.0 + buffer)
 
-            # Gründe dokumentieren
-            df['reason'] = ''
-            df.loc[~signal_conditions[0], 'reason'] += f"Preisänderung zu gering (<{self.price_change_pct}); "
-            df.loc[~signal_conditions[1], 'reason'] += f"Volumen zu gering (<x{self.volume_mult}); "
-            df.loc[~signal_conditions[2], 'reason'] += f"RSI zu tief (<{self.rsi_long}); "
+            rsi_ok = float(out.loc[last, self.COL_RSI]) >= self.rsi_long
+            vol_ok = float(out.loc[last, self.COL_VOLUME_SCORE]) >= self.volume_mult
+            pchg_ok = float(out[self.COL_PRICE_CHANGE].iloc[-1]) >= self.price_change_pct
 
-            # Signal berechnen
-            df['signal'] = signal_conditions[0] & signal_conditions[1] & signal_conditions[2]
+            signal_now = bool(env_ok and mtf_ok and don_ok and rsi_ok and vol_ok and pchg_ok)
 
-            if df['signal'].any():
-                last = df[df['signal']].iloc[-1]
+            # Entry/SL/TP/Vol berechnen (einfaches Schema)
+            entry = price
+            sl = entry * (1.0 - self.stop_loss_pct)
+            tp = entry * (1.0 + self.take_profit_pct)
+            # Volumen wird später von Trader anhand Stake/Balance/StepSize gerundet; hier Dummy > 0
+            volume = 1.0
 
-                avg_vol = rolling_vol.loc[last.name] if last.name in rolling_vol.index else None
-                vol_multiplier = last[self.COL_VOLUME] / avg_vol if avg_vol and avg_vol > 0 else float('nan')
-                price_diff_pct = last[self.COL_PRICE_CHANGE] * 100 if pd.notna(last[self.COL_PRICE_CHANGE]) else float('nan')
+            out['signal'] = False
+            out.loc[last, 'signal'] = signal_now
+            out.loc[last, 'entry'] = entry
+            out.loc[last, 'stop_loss'] = sl
+            out.loc[last, 'take_profit'] = tp
+            out.loc[last, 'volume'] = volume
 
-                msg = (
-                    f"✅ SIGNAL erkannt für {self.market_type.upper()} {self.side.upper()} – SYMBOL: {symbol}\n"
-                    f"Preisänderung: {price_diff_pct:.2f}% ({self.price_change_periods} Perioden)\n"
-                    f"Volumen: {last[self.COL_VOLUME]:.2f} (x{vol_multiplier:.2f})\n"
-                    f"RSI: {last[self.COL_RSI]:.2f}\n"
-                    f"Entry: {last[self.COL_CLOSE]:.4f} | "
-                    f"SL: {(last[self.COL_CLOSE] * (1 - self.stop_loss_pct)):.4f} | "
-                    f"TP: {(last[self.COL_CLOSE] * (1 + self.take_profit_pct)):.4f}"
-                )
-                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals', msg, transaction_id)
-            else:
-                last = df.iloc[-1]
-                msg = (
-                    f"Kein Signal für SYMBOL: {symbol}\n"
-                    f"Preisänderung: {last[self.COL_PRICE_CHANGE]:.4f}, "
-                    f"Volumen: {last[self.COL_VOLUME]:.2f}, "
-                    f"RSI: {last[self.COL_RSI]:.2f}\n"
-                    f"Gründe: {last['reason']}"
-                )
-                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals', msg, transaction_id)
+            # Debug-Log bei Abweisen
+            if not signal_now:
+                why = []
+                if not env_ok:  why.append(f"Regime fail {metrics}")
+                if self.mtf_confirm and not mtf_ok: why.append("MTF fail")
+                if not don_ok: why.append("kein Donchian-Breakout")
+                if not rsi_ok: why.append(f"RSI<{self.rsi_long}")
+                if not vol_ok: why.append(f"RVOL<{self.volume_mult}")
+                if not pchg_ok: why.append(f"Δp<{self.price_change_pct}")
+                self.data.save_log(LOG_DEBUG, self.__class__.__name__, 'evaluate_signals',
+                                   f"{symbol_override or ''} no-signal: {', '.join(why)}", transaction_id)
 
-            # Entry/SL/TP nur bei Signal setzen
-            df['entry'] = df[self.COL_CLOSE].where(df['signal'], pd.NA)
-            df['stop_loss'] = (df[self.COL_CLOSE] * (1 - self.stop_loss_pct)).where(df['signal'], pd.NA)
-            df['take_profit'] = (df[self.COL_CLOSE] * (1 + self.take_profit_pct)).where(df['signal'], pd.NA)
-            df['volume'] = df[self.COL_VOLUME].where(df['signal'], pd.NA)
-            df[self.COL_VOLUME_SCORE] = (
-                abs(df[self.COL_PRICE_CHANGE]) * df[self.COL_VOLUME] * df[self.COL_RSI]
-            ).where(df['signal'], pd.NA)
-
-            df = df.drop(columns=['reason'])
-            return df[[self.COL_TIMESTAMP, self.COL_CLOSE, self.COL_VOLUME, self.COL_PRICE_CHANGE, self.COL_RSI,
-                       'signal', 'entry', 'stop_loss', 'take_profit', 'volume', self.COL_VOLUME_SCORE]]
+            return out
 
         except Exception as e:
             tb = traceback.format_exc()
             self.data.save_log(LOG_ERROR, self.__class__.__name__, 'evaluate_signals', f"{e}\n{tb}", transaction_id)
             send_message(f"[FEHLER] {self.__class__.__name__} | evaluate_signals: {e}\n{tb}", transaction_id)
-            return pd.DataFrame()
+            out['signal'] = False
+            return out

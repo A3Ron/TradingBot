@@ -1,16 +1,30 @@
 name: high_volatility_breakout_momentum
-risk_percent: 0.05 # Prozent des Kapitals, das pro Trade riskiert wird
-stake_percent: 0.05 # Prozent des Kapitals, das pro Trade eingesetzt wird
-stop_loss_buffer: 0.0 # Buffer für Stop-Loss, um Slippage zu vermeiden
+risk_percent: 0.05
+stake_percent: 0.05
+stop_loss_buffer: 0.0
 params:
-  stop_loss_pct: 0.03 # 3% Stop-Loss
-  take_profit_pct: 0.08 # 8% Take-Profit
-  trailing_trigger_pct: 0.04 # Trailing Stop wird bei 4% Gewinn aktiviert
-  price_change_pct: 0.0175 # 1.75% Preisänderung für Long- oder Short-Signal
-  price_change_periods: 5 # 5 Perioden für Preisänderung
-  volume_mult: 1.3 # Multiplikator für Volumen
-  rsi_long: 53 # RSI-Schwelle für Long-Einstieg
-  rsi_short: 43 # RSI-Schwelle für Short-Einstieg
-  rsi_tp_exit: 50 # RSI-Schwelle für Take-Profit-Exit
-  rsi_period: 14 # RSI-Berechnungsperiode
-  momentum_exit_rsi: 50 # RSI-Schwelle für Momentum-Exit
+  stop_loss_pct: 0.03
+  take_profit_pct: 0.08
+  trailing_trigger_pct: 0.04
+  price_change_pct: 0.0175
+  price_change_periods: 5
+  volume_mult: 1.3
+  rsi_long: 53
+  rsi_short: 43
+  rsi_tp_exit: 50
+  rsi_period: 14
+  momentum_exit_rsi: 50
+
+  # --- Neu: Regime-Filter gegen Seitwärtsmarkt ---
+  adx_min: 20
+  atr_min_pct: 0.45         # ATR% (ATR/Close*100)
+  bb_bw_min_pct: 0.6        # Bollinger Bandwidth %
+  chop_max: 45
+  don_len: 20
+  breakout_buffer_pct: 0.05 # Puffer über/unter Donchian in %
+
+  # --- Neu: MTF-Bestätigung (optional) ---
+  mtf_confirm: true
+  mtf_timeframe: "15m"
+  mtf_ema_span: 50
+  mtf_slope_periods: 20
