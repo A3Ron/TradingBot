@@ -50,42 +50,53 @@ def symbol_db_to_ccxt(symbol, quotes):
     return symbol
 
 def format_startup_message(config, spot_symbols, futures_symbols):
-    init_symbol = spot_symbols[0] if spot_symbols else (futures_symbols[0] if futures_symbols else '')
+    init_symbol = spot_symbols[0] if spot_symbols else (futures_symbols[0] if futures_symbols else '–')
     try:
         with open(STRATEGY_PATH, encoding="utf-8") as f:
             strategy_cfg = yaml.safe_load(f)
     except Exception:
         strategy_cfg = {}
 
-    risk_percent = strategy_cfg.get('risk_percent', '')
-    stake_percent = strategy_cfg.get('stake_percent', '')
-    futures = config['trading'].get('futures', '')
+    # Haupt-Infos
+    mode = config['execution'].get('mode', 'Unbekannt')
+    timeframe = config['trading'].get('timeframe', 'Unbekannt')
+    strategy_name = strategy_cfg.get('name', 'Unbekannt')
+    risk_percent = strategy_cfg.get('risk_percent', '–')
+    stake_percent = strategy_cfg.get('stake_percent', '–')
+    futures_enabled = config['trading'].get('futures', False)
+    max_trades_per_day = config['execution'].get('max_trades_per_day', '–')
+
+    # Strategie-Parameter
     params = strategy_cfg.get('params', {})
 
+    # Dynamische Parameter-Liste
+    param_lines = "\n".join([
+        f"  • {k}: {v}"
+        for k, v in params.items()
+    ]) if params else "  (Keine Parameter definiert)"
+
     return (
-        f"TradingBot gestartet!\n"
-        f"Modus: {config['execution'].get('mode', '')}\n"
-        f"Initialisiertes Symbol: {init_symbol}\n"
-        f"Timeframe: {config['trading'].get('timeframe', '')}\n"
-        f"Strategie: {strategy_cfg.get('name', 'Unbekannt')}\n"
-        f"Risk/Trade: {risk_percent}%\n"
-        f"Stake/Trade: {stake_percent}%\n"
-        f"Futures: {futures}\n"
-        f"Max Trades/Tag: {config['execution'].get('max_trades_per_day', '')}\n"
-        f"--- Strategie-Parameter ---\n"
-        f"Stop-Loss %: {params.get('stop_loss_pct', '')}\n"
-        f"Take-Profit %: {params.get('take_profit_pct', '')}\n"
-        f"Trailing-Trigger %: {params.get('trailing_trigger_pct', params.get('trailing_stop_trigger_pct', ''))}\n"
-        f"Price Change %: {params.get('price_change_pct', '')}\n"
-        f"Volume Multiplier: {params.get('volume_mult', '')}\n"
-        f"RSI Long: {params.get('rsi_long', '')}\n"
-        f"RSI Short: {params.get('rsi_short', '')}\n"
-        f"RSI TP Exit: {params.get('rsi_tp_exit', '')}\n"
-        f"Momentum Exit RSI: {params.get('momentum_exit_rsi', '')}\n"
-        f"Price Change Periods: {params.get('price_change_periods', '')}\n"
-        f"--- Gefilterte Symbole ---\n"
-        f"Spot-Symbole ({len(spot_symbols)}): {', '.join(spot_symbols)}\n"
-        f"Futures-Symbole ({len(futures_symbols)}): {', '.join(futures_symbols)}\n"
+        f"🚀 **TradingBot gestartet**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔹 **Modus:** {mode}\n"
+        f"🔹 **Timeframe:** {timeframe}\n"
+        f"🔹 **Strategie:** {strategy_name}\n"
+        f"🔹 **Initial-Symbol:** {init_symbol}\n"
+        f"🔹 **Risk/Trade:** {risk_percent}\n"
+        f"🔹 **Stake/Trade:** {stake_percent}\n"
+        f"🔹 **Futures aktiviert:** {futures_enabled}\n"
+        f"🔹 **Max. Trades/Tag:** {max_trades_per_day}\n"
+        f"\n📊 **Strategie-Parameter:**\n{param_lines}\n"
+        f"\n💹 **Gefilterte Symbole:**\n"
+        f"  Spot ({len(spot_symbols)}): {', '.join(spot_symbols) if spot_symbols else '–'}\n"
+        f"  Futures ({len(futures_symbols)}): {', '.join(futures_symbols) if futures_symbols else '–'}\n"
+        f"\n⚙ **Globale Filter & Limits:**\n"
+        f"  • Blacklist: {', '.join(BLACKLIST)}\n"
+        f"  • TOP_N: {TOP_N}\n"
+        f"  • Min. Volatilität %: {MIN_VOLATILITY_PCT}\n"
+        f"  • Min. Volumen USD: {MIN_VOLUME_USD:,}\n"
+        f"  • Symbol-Update-Intervall: {SYMBOL_UPDATE_INTERVAL/3600:.1f}h\n"
+        f"  • Exit-Cooldown: {EXIT_COOLDOWN_SECONDS/60} min\n"
     )
 
 # --- Initialisierung ---
