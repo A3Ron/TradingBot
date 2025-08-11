@@ -49,11 +49,8 @@ class DataFetcher:
             session.close()
 
     def fetch_ohlcv(self, symbols, market_type, timeframe, transaction_id, limit):
-        exchange = ccxt.binance({
-            "enableRateLimit": True,
-            "options": {"defaultType": market_type}
-        })
-
+        # Bestehende Exchanges verwenden (kein Neuaufbau je Call)
+        exchange = self.spot_exchange if market_type == "spot" else self.futures_exchange
         ohlcv_map = {}
 
         for symbol in symbols:
@@ -70,11 +67,7 @@ class DataFetcher:
         return ohlcv_map
 
     def fetch_ohlcv_single(self, symbol, market_type, timeframe, transaction_id, limit):
-        exchange = ccxt.binance({
-            "enableRateLimit": True,
-            "options": {"defaultType": market_type}
-        })
-
+        exchange = self.spot_exchange if market_type == "spot" else self.futures_exchange
         try:
             data = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
             return data
@@ -85,11 +78,17 @@ class DataFetcher:
 
     def fetch_binance_tickers(self, transaction_id: str = None) -> dict:
         transaction_id = transaction_id or str(uuid.uuid4())
-
         try:
-            binance = ccxt.binance()
-            tickers = binance.fetch_tickers()
-            if not isinstance(tickers, dict) or len(tickers) == 0:
+            # Spot + Futures zusammenführen (manche Symbole existieren nur als Futures)
+            spot_tickers = self.spot_exchange.fetch_tickers()
+            fut_tickers = {}
+            try:
+                fut_tickers = self.futures_exchange.fetch_tickers()
+            except Exception as e:
+                self.save_log("ERROR", "fetcher", "fetch_binance_tickers", f"Futures-Ticker Fehler: {e}", transaction_id)
+            tickers = dict(spot_tickers or {})
+            tickers.update(fut_tickers or {})
+            if not tickers:
                 raise ValueError("fetch_tickers hat keine gültigen Daten zurückgegeben")
             return tickers
         except Exception as e:
@@ -122,13 +121,7 @@ class DataFetcher:
 
     def fetch_balances_full_report(self, market_type: str = "spot", tx_id: str = None, as_text: bool = True):
         """
-        Liefert alle Balances für das angegebene Market Type (spot oder futures),
-        mit free, used und total pro Asset. Optional als Telegram-Text.
-
-        :param market_type: "spot" oder "futures"
-        :param tx_id: Transaktions-ID (optional)
-        :param as_text: Ob der Rückgabewert als formatierten String (für Telegram) oder dict zurückgegeben werden soll
-        :return: str oder dict
+        Vollbericht (free/used/total); optional als Text.
         """
         tx_id = tx_id or str(uuid.uuid4())
         exchange = self.spot_exchange if market_type == "spot" else self.futures_exchange
@@ -139,26 +132,18 @@ class DataFetcher:
             used = balance_data.get("used", {})
             total = balance_data.get("total", {})
 
-            # Filter nur Assets mit > 0 Balance
+            # nur Assets mit >0 total
             all_assets = sorted({*free, *used, *total})
             nonzero_assets = [asset for asset in all_assets if total.get(asset, 0) > 0]
 
-            report = {}
-            for asset in nonzero_assets:
-                report[asset] = {
-                    "free": free.get(asset, 0.0),
-                    "used": used.get(asset, 0.0),
-                    "total": total.get(asset, 0.0)
-                }
-
             if as_text:
                 lines = [f"📊 {market_type.capitalize()} Balances:"]
-                for asset, b in report.items():
-                    lines.append(f"{asset}: free={b['free']:.4f}, used={b['used']:.4f}, total={b['total']:.4f}")
+                for asset in nonzero_assets:
+                    lines.append(f"{asset}: free={free.get(asset, 0):.4f}, used={used.get(asset, 0):.4f}, total={total.get(asset, 0):.4f}")
                 return "\n".join(lines)
 
+            report = {asset: {"free": free.get(asset, 0.0), "used": used.get(asset, 0.0), "total": total.get(asset, 0.0)} for asset in nonzero_assets}
             send_message(report)
-
             return report
 
         except Exception as e:
@@ -166,7 +151,6 @@ class DataFetcher:
             self.save_log("ERROR", "fetcher", "fetch_balances_full_report", msg, tx_id)
             send_message(f"[FEHLER] fetch_balances_full_report: {msg}", tx_id)
             return "" if as_text else {}
-
 
     def update_symbols_from_binance(self):
         transaction_id = str(uuid.uuid4())
@@ -210,6 +194,7 @@ class DataFetcher:
                         updated_at=now
                     )
 
+                # --- SPOT: active + USDT ---
                 for market in spot_markets.values():
                     if market.get("active") and market.get("quote") == "USDT":
                         try:
@@ -222,12 +207,16 @@ class DataFetcher:
                             self.save_log("ERROR", "fetcher", "update_symbols_from_binance", msg, transaction_id)
                             send_message(f"❌ {msg}", transaction_id)
 
+                # --- FUTURES: perpetual (swap) + linear + USDT  (Fallback: info.contractType=PERPETUAL) ---
                 for market in futures_markets.values():
+                    info = market.get("info", {}) or {}
+                    is_perp_via_info = (info.get("contractType") == "PERPETUAL")
                     if (
-                        market.get("active") and
-                        market.get("quote") == "USDT" and
-                        market.get("contractType") == "PERPETUAL" and
-                        market.get("linear") is True
+                        market.get("active")
+                        and market.get("quote") == "USDT"
+                        and (market.get("swap") is True or is_perp_via_info)
+                        and (market.get("linear") is True)
+                        and not market.get("inverse", False)
                     ):
                         try:
                             symbol = build_symbol(market, "futures")
