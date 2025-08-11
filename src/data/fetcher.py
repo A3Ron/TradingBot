@@ -1,16 +1,15 @@
 # data/fetcher.py
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
-import re
 import traceback
 import uuid
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import ccxt
-import pandas as pd
 from dotenv import load_dotenv
+import pandas as pd
 from sqlalchemy import text
 
 from models.trade import Trade
@@ -26,86 +25,81 @@ api_secret = os.getenv("BINANCE_API_SECRET")
 
 class DataFetcher:
     """
-    Zentraler Daten-Fetcher für Spot & Futures (Binance via CCXT).
+    Zentrale Börsen-/DB-Schnittstelle.
 
     Highlights:
-    - Market-Caching für Spot/Futures
-    - Robuste Symbol-Normalisierung:
-        * 'CAKE/USDT:USDT' -> 'CAKE/USDT'
-        * 'BTCUSDT' -> 'BTC/USDT'
-        * Entfernt Kontrakt-/Liefer-Suffixe (z.B. '-251226')
-    - Tolerante Filterung:
-        * kind in {'spot','futures', None}; bei None wird auto-detektiert
-    - Defensive Fehlerbehandlung & saubere Logs
+    - Korrekte Futures-Symbol-Normalisierung (fügt ...:USDT als Kandidat hinzu)
+    - Vorab-Validierung gegen geladene Markets (Spot/Futures)
+    - Reduzierter Log-Spam: entfernte Symbole werden aggregiert geloggt
+    - Defensive Fehlerbehandlung (tickers/ohlcv/balances)
     """
 
-    def __init__(self) -> None:
-        self._last_symbol_update: float = 0.0
+    def __init__(self):
+        self._last_symbol_update = 0
 
         # Exchanges einmalig instanziieren
         self.spot_exchange = ccxt.binance({
             "apiKey": api_key,
             "secret": api_secret,
             "enableRateLimit": True,
-            # options: defaultType=spot (Default), daher nicht notwendig
+            # "options": {"defaultType": "spot"}  # default
         })
-
-        # USDⓈ-M Futures
         self.futures_exchange = ccxt.binance({
             "apiKey": api_key,
             "secret": api_secret,
             "enableRateLimit": True,
-            "options": {"defaultType": "future"},
+            "options": {"defaultType": "future"}
         })
 
-        # Market-Caches
+        # Market-Caches (mit Zeitstempel)
         self._markets_cache = {
             "spot": {"ts": 0.0, "markets": {}},
             "futures": {"ts": 0.0, "markets": {}},
         }
 
     # -------------------- Logging Wrapper --------------------
-    def save_log(self, level: str, source: str, method: str, message: str, transaction_id: str) -> None:
+    def save_log(self, level: str, source: str, method: str, message: str, transaction_id: str):
         save_log(level, source, method, message, transaction_id)
 
-    # -------------------- Helpers --------------------
-    def _normalize_symbol(self, s: str) -> str:
+    # -------------------- Normalisierung --------------------
+    @staticmethod
+    def _strip_suffix(symbol: str, suffix: str = ":USDT") -> str:
+        return symbol.replace(suffix, "") if suffix in symbol else symbol
+
+    def _normalize_candidates(self, symbol: str, kind: str) -> List[str]:
         """
-        Normalisiert verschiedene Symbol-Varianten zu CCXT-Form:
-        - Entfernt doppelte Quote-Suffixe wie ':USDT' → 'CAKE/USDT'
-        - Entfernt eventuelle Liefer-/Kontrakt-Suffixe (z. B. '-251226')
-        - Wandelt 'BTCUSDT' → 'BTC/USDT', wenn kein Slash vorhanden
+        Liefert mögliche Schreibweisen für ein Symbol.
+        - Entfernt ggf. ':USDT'
+        - Wandelt 'BTCUSDT' -> 'BTC/USDT'
+        - Lässt vorhandenes 'BASE/QUOTE' stehen
+        - Für Futures zusätzlich '...:USDT' hinzufügen
+        Reihenfolge = Präferenz.
         """
-        if not s:
-            return s
-        s = s.strip()
+        cands: List[str] = [symbol]
 
-        # Doppel-Quote entfernen: "CAKE/USDT:USDT" -> "CAKE/USDT"
-        s = re.sub(r":USDT$", "", s, flags=re.IGNORECASE)
+        # Variante ohne ':USDT'
+        stripped = self._strip_suffix(symbol)
+        if stripped != symbol:
+            cands.append(stripped)
 
-        # Perps/Delivery-Suffixe defensiv kappen, z.B. ":USDT-251226" oder "-251226"
-        s = re.sub(r"(:?[A-Z]{3,5})-(\d{6}|\d{2}[A-Z]{3}\d{2})$", r"\1", s)
+        # 'BTCUSDT' -> 'BTC/USDT'
+        if "/" not in stripped and stripped.endswith("USDT") and len(stripped) > 4:
+            base = stripped[:-4]
+            cands.append(f"{base}/USDT")
 
-        # "BTCUSDT" -> "BTC/USDT" (nur wenn kein Slash)
-        if "/" not in s:
-            # Häufigster Fall
-            if s.upper().endswith("USDT") and len(s) > 4:
-                base = s[:-4]
-                s = f"{base}/USDT"
-            # Weitere häufige Stable-Quotes, optional erweiterbar:
-            elif s.upper().endswith("FDUSD") and len(s) > 5:
-                base = s[:-5]
-                s = f"{base}/FDUSD"
-            elif s.upper().endswith("BUSD") and len(s) > 4:
-                base = s[:-4]
-                s = f"{base}/BUSD"
+        # Für Futures zusätzlich die Settlement-Variante anbieten
+        if kind == "futures":
+            fut_cands = []
+            for s in cands:
+                if s.endswith("/USDT") and ":USDT" not in s:
+                    fut_cands.append(f"{s}:USDT")
+            cands.extend(fut_cands)
 
-        # Leer-/Doppelslashes säubern
-        s = re.sub(r"\s+", "", s)
-        s = s.replace("//", "/")
-        return s
+        # Dubletten entfernen, Reihenfolge wahren
+        return list(dict.fromkeys(cands))
 
-    def _ensure_markets(self, kind: str, force: bool = False) -> Dict:
+    # -------------------- Markets / Filtering --------------------
+    def _ensure_markets(self, kind: str, force: bool = False) -> Dict[str, dict]:
         """
         Lädt und cached die Markets für 'spot' oder 'futures'.
         """
@@ -119,88 +113,91 @@ class DataFetcher:
                 cache["markets"] = markets or {}
                 cache["ts"] = datetime.now(timezone.utc).timestamp()
                 self.save_log("DEBUG", "fetcher", "_ensure_markets",
-                              f"{key} markets loaded: {len(cache['markets'])}", str(uuid.uuid4()))
+                              f"{key} markets loaded: {len(cache['markets'])}",
+                              str(uuid.uuid4()))
             except Exception as e:
-                cache["markets"] = cache.get("markets", {}) or {}
+                # Fallback: alter Cache bleibt erhalten (falls vorhanden)
+                if not cache["markets"]:
+                    cache["markets"] = {}
                 self.save_log("ERROR", "fetcher", "_ensure_markets",
-                              f"Fehler beim Laden der {key}-Markets: {e}", str(uuid.uuid4()))
+                              f"Fehler beim Laden der {key}-Markets: {e}",
+                              str(uuid.uuid4()))
         return cache["markets"]
 
-    # -------------------- Markets / Filtering --------------------
-    def filter_symbols_that_exist(self,
-                                  symbols: List[str],
-                                  kind: Optional[str],
-                                  transaction_id: str = "") -> List[str]:
+    def filter_symbols_that_exist(self, symbols: List[str], kind: str, transaction_id: str = "") -> List[str]:
         """
-        Filtert eine Liste von Symbolen auf tatsächlich aktive Binance-Märkte.
+        Entfernt Symbole, die bei Binance (spot/futures) NICHT existieren/aktiv sind.
+        kind: 'spot' | 'futures'
 
-        - Symbole werden zuerst normalisiert (z. B. 'CAKE/USDT:USDT' → 'CAKE/USDT', 'BTCUSDT' → 'BTC/USDT').
-        - 'kind' kann 'spot', 'futures' oder None sein.
-          * Bei None wird auto-detektiert (Symbol akzeptiert, wenn es in Spot ODER Futures existiert).
-        - Gibt nur die gültigen Symbole zurück und loggt das Entfernen der ungültigen auf DEBUG.
+        Zusätzlich:
+        - normalisiert Eingaben (entfernt ':USDT', wandelt 'BTCUSDT' -> 'BTC/USDT', ergänzt bei Futures ':USDT')
+        - lässt nur USDT-Spot-Paare bzw. USDT‑linear PERPETUAL (Futures) durch
+        - reduziert Log-Spam durch Sammelmeldung
         """
         if not symbols:
             return []
 
-        # Markets laden
-        spot_markets = self._ensure_markets("spot") or {}
-        fut_markets = self._ensure_markets("futures") or {}
-
-        # Wenn gar nichts ladbar: besser NICHT filtern (um nicht alles zu verlieren)
-        if not spot_markets and not fut_markets:
+        if kind not in ("spot", "futures"):
             self.save_log("ERROR", "fetcher", "symbol_filter",
-                          "Keine Markets (spot/futures) verfügbar – Filterung übersprungen",
+                          f"Ungültiger market_type={kind!r}", transaction_id)
+            return []
+
+        markets = self._ensure_markets(kind)
+        if not markets:
+            # lieber nichts filtern (nicht alles verwerfen)
+            self.save_log("ERROR", "fetcher", "symbol_filter",
+                          f"Keine Markets für {kind} verfügbar – keine Filterung möglich",
                           transaction_id)
             return list(symbols)
 
-        # Gültige Symbol-Mengen bilden
-        spot_valid = {
-            m["symbol"] for m in spot_markets.values()
-            if m.get("spot") and m.get("active", True)
-        }
-        futures_valid = {
-            m["symbol"] for m in fut_markets.values()
-            if m.get("contract") and m.get("swap") and m.get("linear", True) and m.get("active", True)
-        }
+        # Map der kanonischen CCXT-Symbole
+        symbol_to_market = {m.get("symbol"): m for m in markets.values() if m.get("symbol")}
+        valid_symbols = set(symbol_to_market.keys())
 
-        filtered: List[str] = []
+        kept: List[str] = []
+        removed: List[str] = []
+
         for raw in symbols:
-            s = self._normalize_symbol(raw)
+            found_symbol: Optional[str] = None
 
-            if kind == "spot":
-                if s in spot_valid:
-                    filtered.append(s)
+            for cand in self._normalize_candidates(raw, kind):
+                if cand not in valid_symbols:
+                    continue
+
+                m = symbol_to_market[cand]
+                if not m.get("active", True):
+                    continue
+
+                if kind == "spot":
+                    if m.get("spot") is True and m.get("quote") == "USDT":
+                        found_symbol = m.get("symbol")
+                        break
                 else:
-                    self.save_log("DEBUG", "fetcher", "symbol_filter",
-                                  f"{s} entfernt: unbekannt/delisted/nicht spot",
-                                  transaction_id)
-                continue
+                    info = m.get("info", {}) or {}
+                    is_perp = (m.get("swap") is True) or (info.get("contractType") == "PERPETUAL")
+                    is_linear = (m.get("linear") is True) and not m.get("inverse", False)
+                    is_usdt = (m.get("quote") == "USDT")
+                    if is_perp and is_linear and is_usdt:
+                        found_symbol = m.get("symbol")
+                        break
 
-            if kind == "futures":
-                if s in futures_valid:
-                    filtered.append(s)
-                else:
-                    self.save_log("DEBUG", "fetcher", "symbol_filter",
-                                  f"{s} entfernt: unbekannt/delisted/nicht futures",
-                                  transaction_id)
-                continue
-
-            # kind == None → auto-detect
-            if s in spot_valid or s in futures_valid:
-                filtered.append(s)
+            if found_symbol:
+                kept.append(found_symbol)
             else:
-                self.save_log("DEBUG", "fetcher", "symbol_filter",
-                              f"{s} entfernt: unbekannt/delisted (auto-detect)",
-                              transaction_id)
+                removed.append(raw)
 
-        return filtered
+        # Sammel-Log, um Debug-Noise zu minimieren
+        if removed:
+            sample = ", ".join(removed[:10])
+            more = f" (+{len(removed)-10} weitere)" if len(removed) > 10 else ""
+            self.save_log("DEBUG", "fetcher", "symbol_filter",
+                          f"{len(removed)} Symbole entfernt (unbekannt/delisted/nicht {kind}): {sample}{more}",
+                          transaction_id)
+
+        return kept
 
     # -------------------- DB Queries --------------------
     def get_all_symbols(self, symbol_type: Optional[str] = None) -> List[dict]:
-        """
-        Liefert Symbole aus der DB (Tabelle 'symbols'), optional nach Typ gefiltert.
-        symbol_type in {'spot','futures', None}
-        """
         session = get_session()
         query = "SELECT * FROM symbols"
         try:
@@ -214,96 +211,103 @@ class DataFetcher:
             session.close()
 
     # -------------------- Marktdaten --------------------
-    def fetch_ohlcv(self,
-                    symbols: List[str],
-                    market_type: str,
-                    timeframe: str,
-                    transaction_id: str,
-                    limit: int) -> Dict[str, pd.DataFrame]:
+    def fetch_ohlcv(
+        self,
+        symbols: List[str],
+        market_type: str,
+        timeframe: str,
+        transaction_id: str,
+        limit: int,
+    ) -> Dict[str, pd.DataFrame]:
         """
-        Holt OHLCV je Symbol. Überspringt unbekannte Symbole (DEBUG statt ERROR).
+        Holt OHLCV je Symbol. Überspringt unbekannte/zwischenzeitlich delistete Symbole (DEBUG statt ERROR).
         Erwartet market_type in {'spot','futures'}.
         """
         exchange = self.spot_exchange if market_type == "spot" else self.futures_exchange
         ohlcv_map: Dict[str, pd.DataFrame] = {}
 
-        # Sicherstellen: Markets geladen
+        # Sicherstellen: Markets geladen und Symbole gültig
         markets = self._ensure_markets(market_type)
         if not markets:
             self.save_log("ERROR", "fetcher", "fetch_ohlcv",
-                          f"Keine {market_type}-Markets verfügbar – Abbruch",
-                          transaction_id)
-            send_message(f"❌ fetch_ohlcv abgebrochen: Keine {market_type}-Markets verfügbar", transaction_id)
+                          f"Keine {market_type}-Markets verfügbar – Abbruch", transaction_id)
+            send_message(f"❌ fetch_ohlcv abgebrochen: Keine {market_type}-Markets verfügbar")
             return ohlcv_map
 
-        # Vorab-Filter + Normalisierung
+        # Pre-Filter + Normalisierung -> liefert kanonische CCXT-Symbole
         symbols = self.filter_symbols_that_exist(symbols, market_type, transaction_id)
 
-        for raw_symbol in symbols:
-            symbol = self._normalize_symbol(raw_symbol)
+        for sym in symbols:
             try:
-                data = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+                data = exchange.fetch_ohlcv(sym, timeframe=timeframe, limit=limit)
                 df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume"])
                 if df.empty:
                     self.save_log("DEBUG", "fetcher", "fetch_ohlcv",
-                                  f"{symbol}: leere OHLCV-Antwort", transaction_id)
+                                  f"{sym}: leere OHLCV-Antwort", transaction_id)
                     continue
-                df["symbol"] = symbol
+                df["symbol"] = sym
                 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-                ohlcv_map[symbol] = df
+                ohlcv_map[sym] = df
             except Exception as e:
                 emsg = str(e).lower()
                 if "does not have market symbol" in emsg:
+                    # Erwartbar, falls Race-Condition/Delisting; DEBUG statt ERROR
                     self.save_log("DEBUG", "fetcher", "fetch_ohlcv_skip",
-                                  f"{symbol} übersprungen: {e}", transaction_id)
+                                  f"{sym} übersprungen: {e}", transaction_id)
                     continue
                 self.save_log("ERROR", "fetcher", "fetch_ohlcv",
-                              f"Fehler bei {symbol}: {e}", transaction_id)
-                send_message(f"❌ Fehler beim Laden von OHLCV für {symbol}: {e}", transaction_id)
+                              f"Fehler bei {sym}: {e}", transaction_id)
+                send_message(f"❌ Fehler beim Laden von OHLCV für {sym}: {e}")
 
         return ohlcv_map
 
-    def fetch_ohlcv_single(self,
-                           symbol: str,
-                           market_type: str,
-                           timeframe: str,
-                           transaction_id: str,
-                           limit: int) -> List[list]:
-        """
-        Einzelsymbol-Variante (mit Normalisierung + defensiver Marktprüfung).
-        """
+    def fetch_ohlcv_single(
+        self,
+        symbol: str,
+        market_type: str,
+        timeframe: str,
+        transaction_id: str,
+        limit: int,
+    ) -> List[List[float]]:
         exchange = self.spot_exchange if market_type == "spot" else self.futures_exchange
-        sym = self._normalize_symbol(symbol)
 
-        # Vorab-Prüfung (Schlüssel im Markets-Dict sind Symbolstrings)
         markets = self._ensure_markets(market_type)
-        if markets and sym not in markets:
-            self.save_log("DEBUG", "fetcher", "fetch_ohlcv_single",
-                          f"{sym} unbekannt – skip", transaction_id)
+        if not markets:
+            self.save_log("ERROR", "fetcher", "fetch_ohlcv_single",
+                          f"Keine {market_type}-Markets verfügbar", transaction_id)
             return []
 
-        try:
-            data = exchange.fetch_ohlcv(sym, timeframe=timeframe, limit=limit)
-            return data
-        except Exception as e:
-            emsg = str(e).lower()
-            if "does not have market symbol" in emsg:
-                self.save_log("DEBUG", "fetcher", "fetch_ohlcv_single_skip",
-                              f"{sym} übersprungen: {e}", transaction_id)
+        # Map der kanonischen CCXT-Symbole
+        symbol_to_market = {m.get("symbol"): m for m in markets.values() if m.get("symbol")}
+        valid_symbols = set(symbol_to_market.keys())
+
+        # Kandidaten abarbeiten
+        for cand in self._normalize_candidates(symbol, market_type):
+            if cand not in valid_symbols:
+                continue
+            try:
+                data = exchange.fetch_ohlcv(cand, timeframe=timeframe, limit=limit)
+                return data
+            except Exception as e:
+                emsg = str(e).lower()
+                if "does not have market symbol" in emsg:
+                    self.save_log("DEBUG", "fetcher", "fetch_ohlcv_single_skip",
+                                  f"{cand} übersprungen: {e}", transaction_id)
+                    continue
+                self.save_log("ERROR", "fetcher", "fetch_ohlcv_single",
+                              f"Fehler bei {cand}: {e}", transaction_id)
+                send_message(f"❌ Fehler beim Laden von OHLCV für {cand}: {e}")
                 return []
-            self.save_log("ERROR", "fetcher", "fetch_ohlcv_single",
-                          f"Fehler bei {sym}: {e}", transaction_id)
-            send_message(f"❌ Fehler beim Laden von OHLCV für {sym}: {e}", transaction_id)
-            return []
+        # nichts gefunden
+        self.save_log("DEBUG", "fetcher", "fetch_ohlcv_single",
+                      f"{symbol} unbekannt/nicht verfügbar – skip", transaction_id)
+        return []
 
     def fetch_binance_tickers(self, transaction_id: Optional[str] = None) -> Dict[str, dict]:
-        """
-        Lädt Ticker für Spot & Futures und merged sie in ein Dict.
-        """
         transaction_id = transaction_id or str(uuid.uuid4())
         try:
-            spot_tickers: Dict[str, dict] = {}
-            fut_tickers: Dict[str, dict] = {}
+            spot_tickers = {}
+            fut_tickers = {}
             try:
                 spot_tickers = self.spot_exchange.fetch_tickers()
             except Exception as e:
@@ -323,14 +327,16 @@ class DataFetcher:
         except Exception as e:
             msg = f"Fehler beim Abrufen der Binance-Ticker: {e}\n{traceback.format_exc()}"
             self.save_log("ERROR", "fetcher", "fetch_binance_tickers", msg, transaction_id)
-            send_message(msg, transaction_id)
+            send_message(msg)
             return {}
 
     # -------------------- Balances --------------------
-    def fetch_balances(self,
-                       assets: Optional[List[str]] = None,
-                       market_type: str = "spot",
-                       tx_id: Optional[str] = None) -> Dict[str, float]:
+    def fetch_balances(
+        self,
+        assets: Optional[List[str]] = None,
+        market_type: str = "spot",
+        tx_id: Optional[str] = None
+    ) -> Dict[str, float]:
         tx_id = tx_id or str(uuid.uuid4())
         exchange = self.spot_exchange if market_type == "spot" else self.futures_exchange
 
@@ -351,13 +357,15 @@ class DataFetcher:
         except Exception as e:
             msg = f"Fehler beim Abrufen der {market_type}-Balances: {e}"
             self.save_log("ERROR", "fetcher", "fetch_balances", msg, tx_id)
-            send_message(f"[FEHLER] fetch_balances: {msg}", tx_id)
+            send_message(f"[FEHLER] fetch_balances: {msg}")
             return {}
 
-    def fetch_balances_full_report(self,
-                                   market_type: str = "spot",
-                                   tx_id: Optional[str] = None,
-                                   as_text: bool = True):
+    def fetch_balances_full_report(
+        self,
+        market_type: str = "spot",
+        tx_id: Optional[str] = None,
+        as_text: bool = True
+    ):
         """
         Vollbericht (free/used/total); optional als Text.
         """
@@ -391,22 +399,17 @@ class DataFetcher:
                     "total": float(total.get(asset, 0) or 0),
                 } for asset in nonzero_assets
             }
-            send_message(report)
+            send_message(str(report))
             return report
 
         except Exception as e:
             msg = f"Fehler beim Abrufen der {market_type}-Balances (Vollbericht): {e}"
             self.save_log("ERROR", "fetcher", "fetch_balances_full_report", msg, tx_id)
-            send_message(f"[FEHLER] fetch_balances_full_report: {msg}", tx_id)
+            send_message(f"[FEHLER] fetch_balances_full_report: {msg}")
             return "" if as_text else {}
 
     # -------------------- Symbol-DB Pflege --------------------
-    def update_symbols_from_binance(self) -> Optional[float]:
-        """
-        Lädt Spot- und Futures-Märkte und schreibt die gefilterten, aktiven
-        USDT-Spot und linearen USDT-Perpetuals in die Tabelle 'symbols'.
-        Vorher wird die Tabelle geleert (vollständige Neu-Synchronisation).
-        """
+    def update_symbols_from_binance(self):
         transaction_id = str(uuid.uuid4())
         self.save_log("DEBUG", "fetcher", "update_symbols_from_binance", "Start", transaction_id)
 
@@ -427,13 +430,12 @@ class DataFetcher:
                           f"Futures markets loaded: {len(futures_markets)}", transaction_id)
 
             with get_session() as session:
-                # Voll-Resync
                 session.query(Symbol).delete()
                 now = datetime.now(timezone.utc)
                 added_symbols = 0
 
                 def build_symbol(market: dict, market_type: str) -> Symbol:
-                    leverage_raw = (market.get("info", {}) or {}).get("leverage")
+                    leverage_raw = market.get("info", {}).get("leverage")
                     try:
                         leverage = int(leverage_raw) if leverage_raw and str(leverage_raw).isdigit() else None
                     except Exception:
@@ -441,26 +443,26 @@ class DataFetcher:
 
                     return Symbol(
                         symbol_type=market_type,
-                        symbol=market.get("symbol"),
+                        symbol=market.get("symbol"),  # CCXT-kanonisch (bei Futures inkl. ':USDT')
                         base_asset=market.get("base"),
                         quote_asset=market.get("quote"),
-                        min_qty=(market.get("limits", {}) or {}).get("amount", {}).get("min"),
-                        step_size=(market.get("precision", {}) or {}).get("amount"),
-                        min_notional=(market.get("limits", {}) or {}).get("cost", {}).get("min"),
-                        tick_size=(market.get("precision", {}) or {}).get("price"),
+                        min_qty=market.get("limits", {}).get("amount", {}).get("min"),
+                        step_size=market.get("precision", {}).get("amount"),
+                        min_notional=market.get("limits", {}).get("cost", {}).get("min"),
+                        tick_size=market.get("precision", {}).get("price"),
                         status=market.get("status"),
                         is_spot_trading_allowed=market.get("spot"),
                         is_margin_trading_allowed=market.get("margin"),
-                        contract_type=(market.get("info", {}) or {}).get("contractType"),
+                        contract_type=market.get("info", {}).get("contractType"),
                         leverage=leverage,
                         exchange="binance",
                         created_at=now,
                         updated_at=now
                     )
 
-                # --- SPOT: active + USDT ---
+                # --- SPOT: active + USDT + echte Spot-Märkte ---
                 for market in spot_markets.values():
-                    if market.get("active") and market.get("quote") == "USDT":
+                    if market.get("active") and market.get("quote") == "USDT" and market.get("spot") is True:
                         try:
                             symbol = build_symbol(market, "spot")
                             session.add(symbol)
@@ -469,7 +471,7 @@ class DataFetcher:
                         except Exception as e:
                             msg = f"Fehler beim Hinzufügen von Spot-Symbol {market.get('symbol')}: {e}"
                             self.save_log("ERROR", "fetcher", "update_symbols_from_binance", msg, transaction_id)
-                            send_message(f"❌ {msg}", transaction_id)
+                            send_message(f"❌ {msg}")
 
                 # --- FUTURES: perpetual (swap) + linear + USDT ---
                 for market in futures_markets.values():
@@ -490,7 +492,7 @@ class DataFetcher:
                         except Exception as e:
                             msg = f"Fehler beim Hinzufügen von Futures-Symbol {market.get('symbol')}: {e}"
                             self.save_log("ERROR", "fetcher", "update_symbols_from_binance", msg, transaction_id)
-                            send_message(f"❌ {msg}", transaction_id)
+                            send_message(f"❌ {msg}")
 
                 self.save_log("DEBUG", "fetcher", "update_symbols_from_binance",
                               f"Commit wird ausgeführt ({added_symbols} Symbole)", transaction_id)
@@ -504,7 +506,7 @@ class DataFetcher:
         except Exception as e:
             msg = f"Fehler beim Aktualisieren der Symbole von Binance: {e}\n{traceback.format_exc()}"
             self.save_log("ERROR", "fetcher", "update_symbols_from_binance", msg, transaction_id)
-            send_message(msg, transaction_id)
+            send_message(msg)
             return None
 
     # -------------------- Trades / IDs --------------------
