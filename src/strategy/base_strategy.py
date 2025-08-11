@@ -9,6 +9,7 @@ from models.trade import Trade
 from data import DataFetcher
 from data.constants import LOG_WARNING, LOG_ERROR, LOG_DEBUG
 from telegram import send_message
+from data.telemetry import write_row
 
 
 class BaseStrategy:
@@ -27,7 +28,8 @@ class BaseStrategy:
     def __init__(self, strategy_cfg: dict, transaction_id: str, timeframe: str = '1m', market_type: str = None, side: str = None):
         self.config = strategy_cfg
         self.params = strategy_cfg.get('params', {})
-        # bestehende Parameter
+
+        # Bestehende Parametrisierung
         self.stop_loss_pct = float(self.params.get('stop_loss_pct', 0.03))
         self.take_profit_pct = float(self.params.get('take_profit_pct', 0.08))
         self.trailing_trigger_pct = float(self.params.get('trailing_trigger_pct', 0.05))
@@ -40,13 +42,13 @@ class BaseStrategy:
         self.momentum_exit_rsi = int(self.params.get('momentum_exit_rsi', 50))
         self.rsi_period = int(self.params.get('rsi_period', 14))
 
-        # neue Regime-/MTF-Parameter
+        # Neu: Regime-/MTF-Parameter
         self.adx_min = float(self.params.get('adx_min', 20))
         self.atr_min_pct = float(self.params.get('atr_min_pct', 0.45))          # %
         self.bb_bw_min_pct = float(self.params.get('bb_bw_min_pct', 0.6))       # %
         self.chop_max = float(self.params.get('chop_max', 45))
         self.don_len = int(self.params.get('don_len', 20))
-        self.breakout_buffer_pct = float(self.params.get('breakout_buffer_pct', 0.05))  # 0.05% über/unter Donchian
+        self.breakout_buffer_pct = float(self.params.get('breakout_buffer_pct', 0.05))  # 0.05% Puffer
         self.mtf_confirm = bool(self.params.get('mtf_confirm', False))
         self.mtf_timeframe = str(self.params.get('mtf_timeframe', '15m'))
         self.mtf_ema_span = int(self.params.get('mtf_ema_span', 50))
@@ -121,9 +123,6 @@ class BaseStrategy:
     # ------------------------ Regime & MTF ------------------------
 
     def is_trending_env(self, df: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
-        """
-        Gate gegen Seitwärtsphasen.
-        """
         try:
             adx = self._adx(df)
             atr_vals = self._atr(df)
@@ -160,14 +159,15 @@ class BaseStrategy:
 
     def mtf_ok(self, symbol: str, want_trend: str) -> bool:
         """
-        Optional: 15m Trendbestätigung.
+        Optional: Trendbestätigung auf höherem TF.
         want_trend: 'up' für Long, 'down' für Short
         """
         if not self.mtf_confirm:
             return True
         try:
             tx_id = self.transaction_id or str(uuid.uuid4())
-            ohlcv_map = self.data.fetch_ohlcv([symbol], self.market_type, self.mtf_timeframe, tx_id, limit=max(120, self.mtf_ema_span + self.mtf_slope_periods + 5))
+            ohlcv_map = self.data.fetch_ohlcv([symbol], self.market_type, self.mtf_timeframe, tx_id,
+                                              limit=max(120, self.mtf_ema_span + self.mtf_slope_periods + 5))
             df15 = ohlcv_map.get(symbol)
             if df15 is None or df15.empty:
                 return True  # fail-open
@@ -177,6 +177,50 @@ class BaseStrategy:
             return (s > 0) if want_trend == 'up' else (s < 0)
         except Exception:
             return True  # fail-open
+
+    # ------------------------ Telemetrie ------------------------
+
+    def _collect_regime_metrics(self, df: pd.DataFrame) -> Dict[str, Any]:
+        adx = self._adx(df).iloc[-1]
+        atr = self._atr(df).iloc[-1]
+        price = df[self.COL_CLOSE].iloc[-1]
+        atr_pct = float(atr / price * 100.0) if price else 0.0
+        bb_bw = self._boll_bandwidth_pct(df).iloc[-1]
+        chop = self._choppiness_index(df).iloc[-1]
+        rsi_last = self.ensure_rsi_column(df)[self.COL_RSI].iloc[-1]
+        return {
+            "adx": float(adx) if pd.notnull(adx) else None,
+            "atr_pct": float(atr_pct) if pd.notnull(atr_pct) else None,
+            "bb_bw_pct": float(bb_bw) if pd.notnull(bb_bw) else None,
+            "chop": float(chop) if pd.notnull(chop) else None,
+            "rsi": float(rsi_last) if pd.notnull(rsi_last) else None,
+        }
+
+    def _emit_telemetry(self, *, symbol: str, regime_ok: bool, mtf_ok: bool, extras: Dict[str, Any]):
+        row = {
+            "symbol": symbol,
+            "market_type": self.market_type or "",
+            "side": self.side or "",
+            "timeframe": self.timeframe,
+            "regime_ok": bool(regime_ok),
+            "mtf_ok": bool(mtf_ok),
+            # aktuelle Parameter (für spätere Auswertung)
+            "adx_min_cfg": self.adx_min,
+            "atr_min_pct_cfg": self.atr_min_pct,
+            "bb_bw_min_pct_cfg": self.bb_bw_min_pct,
+            "chop_max_cfg": self.chop_max,
+            "don_len_cfg": self.don_len,
+            "breakout_buffer_pct_cfg": self.breakout_buffer_pct,
+            "volume_mult_cfg": self.volume_mult,
+            "rsi_long_cfg": self.rsi_long,
+            "rsi_short_cfg": self.rsi_short,
+            "mtf_confirm_cfg": self.mtf_confirm,
+        }
+        row.update(extras or {})
+        try:
+            write_row(row)
+        except Exception:
+            pass
 
     # ------------------------ Stops / Exit ------------------------
 
@@ -202,7 +246,7 @@ class BaseStrategy:
             return entry
         return None
 
-    # ------------------------ Signal-API (bestehend) ------------------------
+    # ------------------------ Signal-API ------------------------
 
     def generate_signal(self, df: pd.DataFrame) -> Optional[Signal]:
         try:
@@ -311,6 +355,6 @@ class BaseStrategy:
             send_message(f"[FEHLER] {self.__class__.__name__} | should_exit_trade: {e}\n{tb}", self.transaction_id)
             return False
 
-    # Muss in konkreten Strategien implementiert werden:
+    # Muss in den konkreten Strategien implementiert werden:
     def evaluate_signals(self, df: pd.DataFrame, transaction_id: str, symbol_override: str = None) -> pd.DataFrame:
         raise NotImplementedError

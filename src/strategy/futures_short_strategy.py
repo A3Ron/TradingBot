@@ -21,13 +21,11 @@ class FuturesShortStrategy(BaseStrategy):
         out = df.copy()
 
         try:
-            # Basismetriken
             out[self.COL_PRICE_CHANGE] = out[self.COL_CLOSE].pct_change(self.price_change_periods)
             out[self.COL_VOL_MEAN] = out[self.COL_VOLUME].rolling(20, min_periods=5).median()
             out[self.COL_VOLUME_SCORE] = (out[self.COL_VOLUME] / (out[self.COL_VOL_MEAN] + 1e-9)).clip(lower=0)
             out = self.ensure_rsi_column(out)
 
-            # Donchian
             hh, ll = self._donchian(out, n=self.don_len)
             out['don_high'] = hh
             out['don_low'] = ll
@@ -35,19 +33,15 @@ class FuturesShortStrategy(BaseStrategy):
             last = out.index[-1]
             price = float(out.loc[last, self.COL_CLOSE])
 
-            # Regime-Filter
             env_ok, metrics = self.is_trending_env(out)
-            # MTF optional
             mtf_ok = self.mtf_ok(symbol_override or "", want_trend='down')
 
             buffer = self.breakout_buffer_pct / 100.0
-            don_ok = False
-            if not np.isnan(out.loc[last, 'don_low']):
-                don_ok = price < float(out.loc[last, 'don_low']) * (1.0 - buffer)
-
+            don_ok = (not np.isnan(out.loc[last, 'don_low'])) and (price < float(out.loc[last, 'don_low']) * (1.0 - buffer))
             rsi_ok = float(out.loc[last, self.COL_RSI]) <= self.rsi_short
             vol_ok = float(out.loc[last, self.COL_VOLUME_SCORE]) >= self.volume_mult
-            pchg_ok = float(out[self.COL_PRICE_CHANGE].iloc[-1]) <= -self.price_change_pct
+            pchg = float(out[self.COL_PRICE_CHANGE].iloc[-1])
+            pchg_ok = pchg <= -self.price_change_pct
 
             signal_now = bool(env_ok and mtf_ok and don_ok and rsi_ok and vol_ok and pchg_ok)
 
@@ -62,6 +56,23 @@ class FuturesShortStrategy(BaseStrategy):
             out.loc[last, 'stop_loss'] = sl
             out.loc[last, 'take_profit'] = tp
             out.loc[last, 'volume'] = volume
+
+            # --- Telemetrie
+            regime = self._collect_regime_metrics(out)
+            self._emit_telemetry(
+                symbol=symbol_override or "",
+                regime_ok=env_ok,
+                mtf_ok=mtf_ok,
+                extras=dict(
+                    **regime,
+                    rvol=float(out.loc[last, self.COL_VOLUME_SCORE]),
+                    don_ok=bool(don_ok),
+                    rsi_ok=bool(rsi_ok),
+                    pchg=float(pchg),
+                    pchg_ok=bool(pchg_ok),
+                    signal_now=bool(signal_now),
+                ),
+            )
 
             if not signal_now:
                 why = []
