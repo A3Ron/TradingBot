@@ -12,7 +12,7 @@ def _now_utc():
 
 def _compute_realized_pnl_usdt(side: str, entry_price: float, exit_price: float, volume: float) -> float:
     """
-    Realisierter PnL in USDT (Quote):
+    Realisierter Brutto-PnL in USDT (Quote):
       - Long:  (exit - entry) * volume
       - Short: (entry - exit) * volume
     """
@@ -26,7 +26,7 @@ def _compute_realized_pnl_usdt(side: str, entry_price: float, exit_price: float,
 
 def _compute_profit_percent(pnl_usdt: float, entry_price: float, volume: float) -> float:
     """
-    % relativ zur Positions-Notional (entry_price * volume).
+    Prozent relativ zur Notional (entry_price * volume), BRUTTO.
     """
     notional = float(entry_price) * float(volume)
     if notional <= 0:
@@ -45,18 +45,18 @@ def open_trade(
     take_profit_price: float,
     signal_volume: float,
     order_identifier: Optional[str] = None,
-    extra: Optional[Any] = None,              # JSONB-kompatibel
+    extra: Optional[Any] = None,              # JSONB-kompatibel (dict)
     transaction_id: Optional[str] = None,
 ) -> Trade:
     """
-    Erstellt einen neuen offenen Trade-Eintrag in der Datenbank.
+    Legt einen offenen Trade an (Entry-Zeit = timestamp).
     """
     with get_session() as session:
         now = _now_utc()
         trade = Trade(
             transaction_id=transaction_id,
             symbol_id=symbol_id,
-            symbol_name=ssymbol_name if (ss := symbol_name) else symbol_name,  # schützt vor None
+            symbol_name=symbol_name,
             market_type=market_type,
             side=side,
             status="open",
@@ -68,9 +68,10 @@ def open_trade(
             order_identifier=order_identifier,
             fee_paid=0.0,
             profit_realized=None,
+            profit_realized_net=None,
             profit_percent=None,
             extra=extra,
-            timestamp=now,
+            timestamp=now,           # Entry-Zeitpunkt
         )
         session.add(trade)
         session.commit()
@@ -83,34 +84,37 @@ def close_trade(
     exit_price: float,
     exit_reason: str,
     fee_paid: float = 0.0,
-    raw_order_data: Optional[Any] = None,     # JSONB-kompatibel
+    raw_order_data: Optional[Any] = None,     # JSONB-kompatibel (dict)
 ) -> Optional[Trade]:
     """
-    Schließt einen bestehenden Trade und aktualisiert relevante Felder.
-    - Setzt exit_price, profit_realized (USDT), profit_percent (%), fee_paid, raw_order_data
-    - Setzt closed_at (Exit-Zeitpunkt) und optional updated_at (falls im TimestampMixin vorhanden)
+    Schließt einen Trade:
+      - setzt exit_price, closed_at, exit_reason
+      - berechnet profit_realized (USDT brutto) und profit_realized_net (abzgl. Gebühren)
+      - berechnet profit_percent (brutto, % der Notional)
+      - speichert fee_paid und raw_order_data
     """
     with get_session() as session:
         trade: Trade = session.query(Trade).filter_by(id=trade_id).first()
         if not trade or trade.status == "closed":
             return None
 
-        # PnL berechnen
-        pnl_usdt = _compute_realized_pnl_usdt(trade.side, trade.entry_price, exit_price, trade.trade_volume)
-        profit_pct = _compute_profit_percent(pnl_usdt, trade.entry_price, trade.trade_volume)
+        pnl_brutto = _compute_realized_pnl_usdt(trade.side, trade.entry_price, exit_price, trade.trade_volume)
+        profit_pct = _compute_profit_percent(pnl_brutto, trade.entry_price, trade.trade_volume)
 
         now = _now_utc()
         trade.status = "closed"
         trade.exit_price = float(exit_price)
         trade.exit_reason = exit_reason
-        trade.fee_paid = float(fee_paid or 0.0)
-        trade.raw_order_data = raw_order_data
-        trade.profit_realized = float(pnl_usdt)
-        trade.profit_percent = float(profit_pct)
         trade.closed_at = now
 
-        # timestamp = Entry-Zeit – NICHT überschreiben!
-        # Falls dein TimestampMixin ein updated_at hat, pflegen:
+        trade.fee_paid = float(fee_paid or 0.0)  # Annahme: bereits in USDT-Äquivalent
+        trade.profit_realized = float(pnl_brutto)
+        trade.profit_realized_net = float(pnl_brutto - trade.fee_paid)
+        trade.profit_percent = float(profit_pct)  # Brutto-%
+
+        trade.raw_order_data = raw_order_data
+
+        # timestamp ist Entry-Zeit – NICHT überschreiben.
         if hasattr(trade, "updated_at"):
             trade.updated_at = now
 
