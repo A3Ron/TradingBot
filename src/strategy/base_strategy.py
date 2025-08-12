@@ -29,7 +29,7 @@ class BaseStrategy:
         self.config = strategy_cfg
         self.params = strategy_cfg.get('params', {})
 
-        # Bestehende Parametrisierung
+        # Core-Params
         self.stop_loss_pct = float(self.params.get('stop_loss_pct', 0.03))
         self.take_profit_pct = float(self.params.get('take_profit_pct', 0.08))
         self.trailing_trigger_pct = float(self.params.get('trailing_trigger_pct', 0.05))
@@ -42,13 +42,15 @@ class BaseStrategy:
         self.momentum_exit_rsi = int(self.params.get('momentum_exit_rsi', 50))
         self.rsi_period = int(self.params.get('rsi_period', 14))
 
-        # Neu: Regime-/MTF-Parameter
+        # Regime/MTF
         self.adx_min = float(self.params.get('adx_min', 20))
-        self.atr_min_pct = float(self.params.get('atr_min_pct', 0.45))          # %
-        self.bb_bw_min_pct = float(self.params.get('bb_bw_min_pct', 0.6))       # %
+        self.atr_min_pct = float(self.params.get('atr_min_pct', 0.45))          # Prozent
+        self.bb_bw_min_pct = float(self.params.get('bb_bw_min_pct', 0.6))       # Prozent
         self.chop_max = float(self.params.get('chop_max', 45))
         self.don_len = int(self.params.get('don_len', 20))
-        self.breakout_buffer_pct = float(self.params.get('breakout_buffer_pct', 0.05))  # 0.05% Puffer
+
+        # Achtung: breakout_buffer_pct wird als Prozent konfiguriert (z.B. 0.05 = 0.05%)
+        self.breakout_buffer_pct = float(self.params.get('breakout_buffer_pct', 0.05))
         self.mtf_confirm = bool(self.params.get('mtf_confirm', False))
         self.mtf_timeframe = str(self.params.get('mtf_timeframe', '15m'))
         self.mtf_ema_span = int(self.params.get('mtf_ema_span', 50))
@@ -102,10 +104,14 @@ class BaseStrategy:
         return chop
 
     @staticmethod
-    def _donchian(df: pd.DataFrame, n: int = 20) -> Tuple[pd.Series, pd.Series]:
-        hh = df['high'].rolling(n).max()
-        ll = df['low'].rolling(n).min()
-        return hh, ll
+    def _donchian_prev_band(df: pd.DataFrame, n: int = 20) -> Tuple[pd.Series, pd.Series]:
+        """
+        Donchian-Band der VORHERIGEN n-Kerzen (exclude current).
+        Genau dafür: Breakout-Vergleich mit shift(1).
+        """
+        hh_prev = df['high'].rolling(n).max().shift(1)
+        ll_prev = df['low'].rolling(n).min().shift(1)
+        return hh_prev, ll_prev
 
     def calc_rsi(self, series: pd.Series, period: int) -> pd.Series:
         delta = series.diff()
@@ -158,10 +164,6 @@ class BaseStrategy:
         return float(m)
 
     def mtf_ok(self, symbol: str, want_trend: str) -> bool:
-        """
-        Optional: Trendbestätigung auf höherem TF.
-        want_trend: 'up' für Long, 'down' für Short
-        """
         if not self.mtf_confirm:
             return True
         try:

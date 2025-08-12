@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-PATH = os.getenv("TB_TELEMETRY_PATH", "telemetry/regime_metrics.csv")
+PATH = os.getenv("TB_TELEMETRY_PATH", "src/telemetry/regime_metrics.csv")
 
 def pct(series, p):
     series = pd.to_numeric(series, errors='coerce').dropna()

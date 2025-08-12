@@ -11,7 +11,7 @@ class SpotLongStrategy(BaseStrategy):
     """
     Long-Breakout nur bei trendigem Regime:
     - Regime-Filter: ADX/ATR%/BB-Bandbreite/CHOP
-    - Donchian-Breakout (Close > HH + Buffer)
+    - Donchian-Breakout (Close > HH_prev * (1+Buffer))
     - Relatives Volumen (Volume-Score)
     - RSI >= rsi_long
     Scoring: Volume-Score (je höher, desto besser)
@@ -19,16 +19,17 @@ class SpotLongStrategy(BaseStrategy):
 
     def evaluate_signals(self, df: pd.DataFrame, transaction_id: str, symbol_override: str = None) -> pd.DataFrame:
         out = df.copy()
-
         try:
+            # Price-/Volumen-Features
             out[self.COL_PRICE_CHANGE] = out[self.COL_CLOSE].pct_change(self.price_change_periods)
             out[self.COL_VOL_MEAN] = out[self.COL_VOLUME].rolling(20, min_periods=5).median()
             out[self.COL_VOLUME_SCORE] = (out[self.COL_VOLUME] / (out[self.COL_VOL_MEAN] + 1e-9)).clip(lower=0)
             out = self.ensure_rsi_column(out)
 
-            hh, ll = self._donchian(out, n=self.don_len)
-            out['don_high'] = hh
-            out['don_low'] = ll
+            # Donchian der VORHERIGEN n-Kerzen
+            hh_prev, ll_prev = self._donchian_prev_band(out, n=self.don_len)
+            out['don_high'] = hh_prev
+            out['don_low'] = ll_prev
 
             last = out.index[-1]
             price = float(out.loc[last, self.COL_CLOSE])
@@ -36,11 +37,14 @@ class SpotLongStrategy(BaseStrategy):
             env_ok, metrics = self.is_trending_env(out)
             mtf_ok = self.mtf_ok(symbol_override or "", want_trend='up')
 
-            buffer = self.breakout_buffer_pct / 100.0
-            don_ok = (not np.isnan(out.loc[last, 'don_high'])) and (price > float(out.loc[last, 'don_high']) * (1.0 + buffer))
+            buffer_frac = self.breakout_buffer_pct / 100.0  # 0.05 -> 0.0005 (0.05%)
+            don_ref = float(out.loc[last, 'don_high']) if pd.notnull(out.loc[last, 'don_high']) else np.nan
+            don_ok = (not np.isnan(don_ref)) and (price > don_ref * (1.0 + buffer_frac))
+
             rsi_ok = float(out.loc[last, self.COL_RSI]) >= self.rsi_long
             vol_ok = float(out.loc[last, self.COL_VOLUME_SCORE]) >= self.volume_mult
-            pchg_ok = float(out[self.COL_PRICE_CHANGE].iloc[-1]) >= self.price_change_pct
+            pchg = float(out[self.COL_PRICE_CHANGE].iloc[-1])
+            pchg_ok = pchg >= self.price_change_pct
 
             signal_now = bool(env_ok and mtf_ok and don_ok and rsi_ok and vol_ok and pchg_ok)
 
@@ -56,7 +60,7 @@ class SpotLongStrategy(BaseStrategy):
             out.loc[last, 'take_profit'] = tp
             out.loc[last, 'volume'] = volume
 
-            # --- Telemetrie
+            # Telemetrie (+ Debug-Felder)
             regime = self._collect_regime_metrics(out)
             self._emit_telemetry(
                 symbol=symbol_override or "",
@@ -67,9 +71,12 @@ class SpotLongStrategy(BaseStrategy):
                     rvol=float(out.loc[last, self.COL_VOLUME_SCORE]),
                     don_ok=bool(don_ok),
                     rsi_ok=bool(rsi_ok),
-                    pchg=float(out[self.COL_PRICE_CHANGE].iloc[-1]),
+                    pchg=float(pchg),
                     pchg_ok=bool(pchg_ok),
                     signal_now=bool(signal_now),
+                    price=float(price),
+                    don_hh_prev=float(don_ref) if not np.isnan(don_ref) else None,
+                    don_ll_prev=float(out.loc[last, 'don_low']) if pd.notnull(out.loc[last, 'don_low']) else None,
                 ),
             )
 
@@ -77,7 +84,7 @@ class SpotLongStrategy(BaseStrategy):
                 why = []
                 if not env_ok:  why.append(f"Regime fail {metrics}")
                 if self.mtf_confirm and not mtf_ok: why.append("MTF fail")
-                if not don_ok: why.append("kein Donchian-Breakout")
+                if not don_ok: why.append("kein Donchian-Breakout (prevHH+Buffer)")
                 if not rsi_ok: why.append(f"RSI<{self.rsi_long}")
                 if not vol_ok: why.append(f"RVOL<{self.volume_mult}")
                 if not pchg_ok: why.append(f"Δp<{self.price_change_pct}")
